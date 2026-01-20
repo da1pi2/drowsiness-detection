@@ -1,38 +1,36 @@
 #!/usr/bin/env python3
 """
 pc_server.py - Server per elaborazione drowsiness detection
-Esegue il processing pesante (dlib) sul PC e comunica con il Raspberry Pi
+Riceve frame dal Raspberry, esegue l'analisi e mostra preview live.
+Comunicazione unidirezionale: solo ricezione frame, nessun invio.
 """
 
 import socket
-import pickle
 import struct
 import cv2
 import dlib
 import numpy as np
 from scipy.spatial import distance
-import threading
 import time
 from datetime import datetime
 
 # ===================== CONFIGURAZIONE SERVER =====================
-SERVER_HOST = '0.0.0.0'  # Ascolta su tutte le interfacce
+SERVER_HOST = '0.0.0.0'
 SERVER_PORT = 5555
 BUFFER_SIZE = 65536
 
-# Soglie per il rilevamento (stesse del Raspberry)
+# Soglie per il rilevamento
 EAR_THRESHOLD = 0.25
 EAR_CONSEC_FRAMES = 20
 MAR_THRESHOLD = 0.6
 YAWN_CONSEC_FRAMES = 15
 
-# Path al modello dlib (scarica da dlib.net)
+# Path al modello dlib
 SHAPE_PREDICTOR_PATH = "shape_predictor_68_face_landmarks.dat"
 
-# ===================== CLASSI =====================
 
 class DrowsinessAnalyzer:
-    """Classe per analizzare i frame ricevuti dal Raspberry"""
+    """Analizza i frame per rilevare sonnolenza"""
     
     def __init__(self):
         print("[INFO] Caricamento detector volti dlib...")
@@ -41,12 +39,12 @@ class DrowsinessAnalyzer:
         print("[INFO] Caricamento shape predictor...")
         self.predictor = dlib.shape_predictor(SHAPE_PREDICTOR_PATH)
         
-        # Indici landmark
+        # Indici landmark (68 punti facciali)
         self.LEFT_EYE = list(range(42, 48))
         self.RIGHT_EYE = list(range(36, 42))
         self.MOUTH = list(range(60, 68))
         
-        # Contatori
+        # Contatori per frame consecutivi
         self.ear_counter = 0
         self.yawn_counter = 0
         self.total_drowsy_events = 0
@@ -55,18 +53,21 @@ class DrowsinessAnalyzer:
         print("[INFO] Analyzer pronto!")
     
     def eye_aspect_ratio(self, eye):
+        """Calcola Eye Aspect Ratio"""
         A = distance.euclidean(eye[1], eye[5])
         B = distance.euclidean(eye[2], eye[4])
         C = distance.euclidean(eye[0], eye[3])
         return (A + B) / (2.0 * C)
     
     def mouth_aspect_ratio(self, mouth):
+        """Calcola Mouth Aspect Ratio"""
         A = distance.euclidean(mouth[2], mouth[6])
         B = distance.euclidean(mouth[3], mouth[5])
         C = distance.euclidean(mouth[0], mouth[4])
         return (A + B) / (2.0 * C)
     
     def shape_to_np(self, shape):
+        """Converte shape dlib in numpy array"""
         coords = np.zeros((68, 2), dtype=int)
         for i in range(68):
             coords[i] = (shape.part(i).x, shape.part(i).y)
@@ -94,12 +95,11 @@ class DrowsinessAnalyzer:
             shape = self.predictor(gray, face)
             shape_np = self.shape_to_np(shape)
             
-            # Estrai punti
             left_eye = shape_np[self.LEFT_EYE]
             right_eye = shape_np[self.RIGHT_EYE]
             mouth = shape_np[self.MOUTH]
             
-            # Calcola EAR
+            # Calcola EAR (media occhi)
             left_ear = self.eye_aspect_ratio(left_eye)
             right_ear = self.eye_aspect_ratio(right_eye)
             result["ear"] = (left_ear + right_ear) / 2.0
@@ -140,7 +140,7 @@ class DrowsinessAnalyzer:
 
 
 class PCServer:
-    """Server TCP per ricevere frame dal Raspberry"""
+    """Server TCP che riceve frame dal Raspberry"""
     
     def __init__(self):
         self.analyzer = DrowsinessAnalyzer()
@@ -148,7 +148,6 @@ class PCServer:
         self.running = False
         self.show_preview = True
         
-        # Statistiche
         self.frames_processed = 0
         self.start_time = None
     
@@ -164,6 +163,7 @@ class PCServer:
         print("=" * 60)
         print(f"[INFO] Server in ascolto su {SERVER_HOST}:{SERVER_PORT}")
         print("[INFO] In attesa di connessione dal Raspberry Pi...")
+        print("[INFO] Preview video: ATTIVA (premi 'q' per uscire, 'p' per toggle)")
         print("=" * 60)
         
         self.running = True
@@ -189,7 +189,7 @@ class PCServer:
         try:
             while self.running:
                 # Ricevi dimensione frame (4 bytes)
-                size_data = client_socket.recv(4)
+                size_data = self._recv_exact(client_socket, 4)
                 if not size_data:
                     print("[INFO] Client disconnesso")
                     break
@@ -197,15 +197,8 @@ class PCServer:
                 frame_size = struct.unpack('>I', size_data)[0]
                 
                 # Ricevi frame completo
-                frame_data = b''
-                while len(frame_data) < frame_size:
-                    remaining = frame_size - len(frame_data)
-                    chunk = client_socket.recv(min(remaining, BUFFER_SIZE))
-                    if not chunk:
-                        break
-                    frame_data += chunk
-                
-                if len(frame_data) != frame_size:
+                frame_data = self._recv_exact(client_socket, frame_size)
+                if not frame_data:
                     continue
                 
                 # Decodifica frame JPEG
@@ -221,22 +214,19 @@ class PCServer:
                 result = self.analyzer.analyze_frame(frame)
                 self.frames_processed += 1
                 
-                # Invia risultato
-                result_data = pickle.dumps(result)
-                client_socket.send(struct.pack('>I', len(result_data)))
-                client_socket.send(result_data)
-                
-                # Mostra preview locale
+                # Mostra preview locale (NO invio al client)
                 if self.show_preview:
-                    self.show_frame(frame, result)
+                    if not self.show_frame(frame, result):
+                        break
                 
                 # Log periodico
                 if self.frames_processed % 30 == 0:
                     elapsed = time.time() - self.start_time
                     fps = self.frames_processed / elapsed if elapsed > 0 else 0
                     status = "⚠️ DROWSY" if result["is_drowsy"] else "✓ OK"
+                    yawn = " 🥱" if result["is_yawning"] else ""
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] "
-                          f"FPS: {fps:.1f} | EAR: {result['ear']:.2f} | {status}")
+                          f"FPS: {fps:.1f} | EAR: {result['ear']:.2f} | {status}{yawn}")
         
         except Exception as e:
             print(f"[ERRORE] Gestione client: {e}")
@@ -246,8 +236,18 @@ class PCServer:
             if self.show_preview:
                 cv2.destroyAllWindows()
     
+    def _recv_exact(self, sock, size):
+        """Riceve esattamente 'size' bytes"""
+        data = b''
+        while len(data) < size:
+            chunk = sock.recv(min(size - len(data), BUFFER_SIZE))
+            if not chunk:
+                return None
+            data += chunk
+        return data
+    
     def show_frame(self, frame, result):
-        """Mostra il frame con overlay"""
+        """Mostra il frame con overlay - ritorna False se l'utente vuole uscire"""
         display = frame.copy()
         
         # Disegna rettangolo volto
@@ -256,12 +256,14 @@ class PCServer:
             color = (0, 0, 255) if result["is_drowsy"] else (0, 255, 0)
             cv2.rectangle(display, (x, y), (x + w, y + h), color, 2)
         
-        # Disegna landmarks
+        # Disegna landmarks (occhi e bocca)
         if result["landmarks"]:
+            # Occhi (verde)
             for eye in [result["landmarks"]["left_eye"], result["landmarks"]["right_eye"]]:
                 pts = np.array(eye, dtype=np.int32)
                 cv2.polylines(display, [pts], True, (0, 255, 0), 1)
             
+            # Bocca (giallo)
             mouth_pts = np.array(result["landmarks"]["mouth"], dtype=np.int32)
             cv2.polylines(display, [mouth_pts], True, (0, 255, 255), 1)
         
@@ -271,21 +273,29 @@ class PCServer:
         cv2.putText(display, f"MAR: {result['mar']:.2f}", (10, 50),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
+        # Alert sonnolenza
         if result["is_drowsy"]:
             cv2.putText(display, "SONNOLENZA!", (10, 80),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
         
+        # Alert sbadiglio
         if result["is_yawning"]:
             cv2.putText(display, "SBADIGLIO!", (10, 110),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
         
-        cv2.imshow("Drowsiness Detection - PC Server", display)
+        # Mostra finestra
+        cv2.imshow("Drowsiness Detection - Live Preview", display)
         
+        # Gestione tasti
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             self.running = False
+            return False
         elif key == ord('p'):
             self.show_preview = not self.show_preview
+            print(f"[INFO] Preview: {'ON' if self.show_preview else 'OFF'}")
+        
+        return True
     
     def cleanup(self):
         """Pulizia risorse"""

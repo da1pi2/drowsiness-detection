@@ -1,0 +1,8 @@
+# Base (per client streaming)
+opencv-python>=4.8.0
+numpy>=1.24.0
+picamera2>=0.3.12
+
+# Aggiuntivi per versione STANDALONE
+#dlib>=19.24.0
+#scipy>=1.10.0

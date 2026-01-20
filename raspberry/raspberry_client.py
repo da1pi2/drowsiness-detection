@@ -1,38 +1,37 @@
 #!/usr/bin/env python3
 """
 raspberry_client.py - Client per Raspberry Pi
-Cattura frame dalla camera e li invia al PC per l'elaborazione
-Riceve i risultati e gestisce l'allarme locale
+Cattura frame dalla camera e li invia al PC per l'elaborazione.
+Comunicazione unidirezionale: solo invio frame, nessuna ricezione.
+
+Compatibile con Raspberry Pi OS Bookworm (64-bit) - usa picamera2
 """
 
 import socket
-import pickle
 import struct
 import cv2
-import numpy as np
 import time
 from datetime import datetime
-import sys
 
-# Import moduli locali
-import drowsiness_config as config
-from alarm_module import AlarmManager
-
-# ===================== CONFIGURAZIONE CLIENT =====================
-# Modifica questo IP con l'indirizzo del tuo PC
+# ===================== CONFIGURAZIONE =====================
 PC_SERVER_IP = "192.168.1.100"  # <-- CAMBIA CON L'IP DEL TUO PC
 PC_SERVER_PORT = 5555
 
-# Qualità compressione JPEG (70 = buon compromesso qualità/banda)
+# Camera
+CAMERA_WIDTH = 320
+CAMERA_HEIGHT = 240
+CAMERA_FPS = 15
+
+# Compressione JPEG (70 = buon compromesso qualità/banda)
 JPEG_QUALITY = 70
 
-# Timeout connessione
+# Connessione
 CONNECTION_TIMEOUT = 10
 RECONNECT_DELAY = 5
 
 
 class RaspberryClient:
-    """Client che invia frame al PC e riceve risultati"""
+    """Client che cattura e invia frame al PC (solo trasmissione)"""
     
     def __init__(self, server_ip, server_port):
         self.server_ip = server_ip
@@ -42,11 +41,7 @@ class RaspberryClient:
         
         # Camera
         self.camera = None
-        self.rawCapture = None
-        self.use_picamera = False
-        
-        # Allarme locale
-        self.alarm = AlarmManager()
+        self.use_picamera2 = False
         
         # Statistiche
         self.frames_sent = 0
@@ -69,40 +64,43 @@ class RaspberryClient:
             return False
     
     def init_camera(self):
-        """Inizializza la camera (PiCamera o USB)"""
+        """Inizializza la camera (picamera2 per Bookworm o USB fallback)"""
         print("[INFO] Inizializzazione camera...")
         
-        # Prova PiCamera
+        # Prova picamera2 (Bookworm)
         try:
-            from picamera.array import PiRGBArray
-            from picamera import PiCamera
+            from picamera2 import Picamera2
             
-            self.camera = PiCamera()
-            self.camera.resolution = (config.CAMERA_WIDTH, config.CAMERA_HEIGHT)
-            self.camera.framerate = config.CAMERA_FPS
-            self.rawCapture = PiRGBArray(self.camera, 
-                                         size=(config.CAMERA_WIDTH, config.CAMERA_HEIGHT))
-            time.sleep(0.1)  # Warmup
-            self.use_picamera = True
-            print(f"[INFO] PiCamera inizializzata: {config.CAMERA_WIDTH}x{config.CAMERA_HEIGHT} @ {config.CAMERA_FPS}fps")
+            self.camera = Picamera2()
+            camera_config = self.camera.create_video_configuration(
+                main={"size": (CAMERA_WIDTH, CAMERA_HEIGHT), "format": "RGB888"},
+                controls={"FrameRate": CAMERA_FPS}
+            )
+            self.camera.configure(camera_config)
+            self.camera.start()
+            
+            time.sleep(0.5)  # Warmup
+            self.use_picamera2 = True
+            print(f"[INFO] PiCamera2 inizializzata: {CAMERA_WIDTH}x{CAMERA_HEIGHT} @ {CAMERA_FPS}fps")
             return True
+            
         except ImportError:
-            print("[WARN] PiCamera non disponibile, provo webcam USB...")
+            print("[WARN] picamera2 non disponibile, provo webcam USB...")
         except Exception as e:
-            print(f"[WARN] Errore PiCamera: {e}")
+            print(f"[WARN] Errore PiCamera2: {e}")
         
-        # Fallback a webcam USB
+        # Fallback a webcam USB / OpenCV
         try:
             self.camera = cv2.VideoCapture(0)
-            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
-            self.camera.set(cv2.CAP_PROP_FPS, config.CAMERA_FPS)
+            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+            self.camera.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
             
             if not self.camera.isOpened():
                 raise Exception("Camera non disponibile")
             
-            self.use_picamera = False
-            print("[INFO] Webcam USB inizializzata")
+            self.use_picamera2 = False
+            print("[INFO] Webcam USB/OpenCV inizializzata")
             return True
         except Exception as e:
             print(f"[ERRORE] Impossibile inizializzare camera: {e}")
@@ -110,10 +108,9 @@ class RaspberryClient:
     
     def capture_frame(self):
         """Cattura un frame dalla camera"""
-        if self.use_picamera:
-            self.rawCapture.truncate(0)
-            self.camera.capture(self.rawCapture, format="bgr", use_video_port=True)
-            return self.rawCapture.array
+        if self.use_picamera2:
+            frame = self.camera.capture_array()
+            return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         else:
             ret, frame = self.camera.read()
             return frame if ret else None
@@ -126,77 +123,55 @@ class RaspberryClient:
             _, encoded = cv2.imencode('.jpg', frame, encode_param)
             data = encoded.tobytes()
             
-            # Invia dimensione (4 bytes) + dati
-            self.socket.send(struct.pack('>I', len(data)))
-            self.socket.send(data)
+            # Invia: [4 byte dimensione] + [dati JPEG]
+            self.socket.sendall(struct.pack('>I', len(data)) + data)
             return True
         except Exception as e:
             print(f"[ERRORE] Invio frame: {e}")
             return False
     
-    def receive_result(self):
-        """Riceve il risultato dell'analisi dal server"""
-        try:
-            # Ricevi dimensione
-            size_data = self.socket.recv(4)
-            if not size_data:
-                return None
-            
-            result_size = struct.unpack('>I', size_data)[0]
-            
-            # Ricevi dati
-            result_data = b''
-            while len(result_data) < result_size:
-                chunk = self.socket.recv(min(result_size - len(result_data), 4096))
-                if not chunk:
-                    break
-                result_data += chunk
-            
-            return pickle.loads(result_data)
-        except Exception as e:
-            print(f"[ERRORE] Ricezione risultato: {e}")
-            return None
-    
     def run(self):
         """Loop principale"""
         print("=" * 60)
-        print("  DROWSINESS DETECTION - RASPBERRY CLIENT")
+        print("  DROWSINESS DETECTION - RASPBERRY STREAMER")
+        print("  (Solo cattura e invio frame)")
         print("=" * 60)
         
         # Inizializza camera
         if not self.init_camera():
             return
         
-        # Connetti al server
+        # Connetti al server (con retry)
         while not self.connected:
             if not self.connect():
                 print(f"[INFO] Riprovo tra {RECONNECT_DELAY} secondi...")
                 time.sleep(RECONNECT_DELAY)
         
         self.start_time = time.time()
-        print("\n[INFO] Sistema attivo! Premi Ctrl+C per uscire")
+        print("\n[INFO] Streaming attivo! Premi Ctrl+C per uscire")
         print("-" * 60)
         
         try:
-            if self.use_picamera:
-                # Stream continuo per PiCamera
-                for frame_obj in self.camera.capture_continuous(
-                    self.rawCapture, format="bgr", use_video_port=True):
-                    
-                    frame = frame_obj.array
-                    self.rawCapture.truncate(0)
-                    
-                    if not self.process_frame(frame):
-                        break
-            else:
-                # Loop per webcam USB
-                while True:
-                    frame = self.capture_frame()
-                    if frame is None:
-                        continue
-                    
-                    if not self.process_frame(frame):
-                        break
+            while self.connected:
+                # Cattura frame
+                frame = self.capture_frame()
+                if frame is None:
+                    continue
+                
+                # Invia al server
+                if not self.send_frame(frame):
+                    print("[WARN] Invio fallito, riconnessione...")
+                    self.connected = False
+                    break
+                
+                self.frames_sent += 1
+                
+                # Log periodico (ogni 30 frame)
+                if self.frames_sent % 30 == 0:
+                    elapsed = time.time() - self.start_time
+                    fps = self.frames_sent / elapsed if elapsed > 0 else 0
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] "
+                          f"Frame inviati: {self.frames_sent} | FPS: {fps:.1f}")
         
         except KeyboardInterrupt:
             print("\n[INFO] Interruzione da tastiera")
@@ -204,82 +179,18 @@ class RaspberryClient:
         finally:
             self.cleanup()
     
-    def process_frame(self, frame):
-        """Processa un singolo frame"""
-        # Invia al server
-        if not self.send_frame(frame):
-            self.connected = False
-            return False
-        
-        # Ricevi risultato
-        result = self.receive_result()
-        if result is None:
-            self.connected = False
-            return False
-        
-        self.frames_sent += 1
-        
-        # Gestisci allarme locale
-        if result.get("is_drowsy", False):
-            self.alarm.start_alarm()
-        else:
-            self.alarm.stop_alarm()
-        
-        # Log periodico
-        if self.frames_sent % 30 == 0:
-            elapsed = time.time() - self.start_time
-            fps = self.frames_sent / elapsed if elapsed > 0 else 0
-            status = "⚠️ DROWSY" if result.get("is_drowsy") else "✓ OK"
-            yawn = " 🥱" if result.get("is_yawning") else ""
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] "
-                  f"FPS: {fps:.1f} | EAR: {result.get('ear', 0):.2f} | {status}{yawn}")
-        
-        # Visualizzazione locale se abilitata
-        if config.DISPLAY_ENABLED:
-            self.show_local_frame(frame, result)
-        
-        return True
-    
-    def show_local_frame(self, frame, result):
-        """Mostra frame locale con overlay dei risultati"""
-        display = frame.copy()
-        
-        # Overlay info
-        ear = result.get('ear', 0)
-        mar = result.get('mar', 0)
-        
-        cv2.putText(display, f"EAR: {ear:.2f}", (10, 25),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        cv2.putText(display, f"MAR: {mar:.2f}", (10, 45),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        
-        if result.get("is_drowsy"):
-            cv2.putText(display, "SONNOLENZA!", (10, 70),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        
-        cv2.imshow("Raspberry Client", display)
-        
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            return False
-        
-        return True
-    
     def cleanup(self):
         """Pulizia risorse"""
-        print("\n[INFO] Chiusura sistema...")
+        print("\n[INFO] Chiusura...")
         
         if self.socket:
             self.socket.close()
         
-        if self.use_picamera and self.camera:
+        if self.use_picamera2 and self.camera:
+            self.camera.stop()
             self.camera.close()
         elif self.camera:
             self.camera.release()
-        
-        self.alarm.stop_alarm()
-        
-        if config.DISPLAY_ENABLED:
-            cv2.destroyAllWindows()
         
         elapsed = time.time() - self.start_time if self.start_time else 0
         fps = self.frames_sent / elapsed if elapsed > 0 else 0
@@ -297,21 +208,17 @@ class RaspberryClient:
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description='Raspberry Client per Drowsiness Detection')
+    parser = argparse.ArgumentParser(description='Raspberry Streamer per Drowsiness Detection')
     parser.add_argument('--server', type=str, default=PC_SERVER_IP,
                        help=f'IP del server PC (default: {PC_SERVER_IP})')
     parser.add_argument('--port', type=int, default=PC_SERVER_PORT,
                        help=f'Porta server (default: {PC_SERVER_PORT})')
-    parser.add_argument('--no-display', action='store_true',
-                       help='Disabilita visualizzazione locale')
-    parser.add_argument('--no-alarm', action='store_true',
-                       help='Disabilita allarme')
+    parser.add_argument('--quality', type=int, default=JPEG_QUALITY,
+                       help=f'Qualità JPEG 1-100 (default: {JPEG_QUALITY})')
     args = parser.parse_args()
     
-    if args.no_display:
-        config.DISPLAY_ENABLED = False
-    if args.no_alarm:
-        config.ALARM_ENABLED = False
+    if args.quality:
+        JPEG_QUALITY = args.quality
     
     client = RaspberryClient(args.server, args.port)
     client.run()
