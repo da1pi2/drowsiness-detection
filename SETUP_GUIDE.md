@@ -125,14 +125,14 @@ pip install -r ../requirements_raspberry.txt
 
 Modifica `raspberry_client.py`:
 ```python
-PC_SERVER_IP = "192.168.1.100"  # <-- IP del tuo PC
+PC_SERVER_IP = "192.168.1.219"  # <-- IP del tuo PC
 ```
 
 ### 2.6 Avvia il Client
 
 ```bash
 source venv_raspberry/bin/activate
-python raspberry_client.py --server <IP_PC>
+python raspberry_client.py --server 192.168.1.219
 ```
 
 ---

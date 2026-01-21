@@ -1,8 +1,17 @@
-# Base (per client streaming)
-opencv-python>=4.8.0
-numpy>=1.24.0
-picamera2>=0.3.12
+# VECCHI
+# opencv-python>=4.8.0
+# numpy>=1.24.0
+# picamera2>=0.3.12
+
+# Gestione compatibilità Picamera2 (richiede NumPy 1.x)
+numpy<2.0.0
+# OpenCV bloccato alla versione 4.9 per non richiedere NumPy 2.x
+opencv-python<4.10.0.0
+# Libreria camera specifica per Raspberry Pi OS
+picamera2>=0.3.0
 
 # Aggiuntivi per versione STANDALONE
-#dlib>=19.24.0
-#scipy>=1.10.0
+#dlib>=19.24.0 VECCHIO
+#scipy>=1.10.0 VECCHIO
+mediapipe
+scipy

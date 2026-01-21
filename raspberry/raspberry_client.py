@@ -11,10 +11,12 @@ import socket
 import struct
 import cv2
 import time
+import psutil
+from gpiozero import CPUTemperature
 from datetime import datetime
 
 # ===================== CONFIGURAZIONE =====================
-PC_SERVER_IP = "192.168.1.100"  # <-- CAMBIA CON L'IP DEL TUO PC
+PC_SERVER_IP = "192.168.1.219"  # <-- CAMBIA CON L'IP DEL TUO PC
 PC_SERVER_PORT = 5555
 
 # Camera
@@ -47,6 +49,20 @@ class RaspberryClient:
         self.frames_sent = 0
         self.start_time = None
     
+    def get_system_stats(self):
+        """Restituisce stringa con CPU%, RAM% e Temp°C"""
+        try:
+            # Temperatura CPU
+            cpu_temp = CPUTemperature().temperature
+            # Percentuale utilizzo CPU
+            cpu_usage = psutil.cpu_percent()
+            # Percentuale utilizzo RAM
+            ram = psutil.virtual_memory()
+            
+            return f"CPU: {cpu_usage}% | RAM: {ram.percent}% | Temp: {cpu_temp:.1f}°C"
+        except Exception:
+            return "Stats N/A"
+
     def connect(self):
         """Connette al server PC"""
         try:
@@ -166,12 +182,16 @@ class RaspberryClient:
                 
                 self.frames_sent += 1
                 
-                # Log periodico (ogni 30 frame)
+                # Log periodico (ogni 30 frame -> circa ogni 2 secondi a 15fps)
                 if self.frames_sent % 30 == 0:
                     elapsed = time.time() - self.start_time
                     fps = self.frames_sent / elapsed if elapsed > 0 else 0
+                    
+                    # Ottieni stats sistema
+                    sys_stats = self.get_system_stats()
+                    
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] "
-                          f"Frame inviati: {self.frames_sent} | FPS: {fps:.1f}")
+                          f"FPS: {fps:.1f} | Frame: {self.frames_sent} || {sys_stats}")
         
         except KeyboardInterrupt:
             print("\n[INFO] Interruzione da tastiera")
@@ -210,11 +230,11 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='Raspberry Streamer per Drowsiness Detection')
     parser.add_argument('--server', type=str, default=PC_SERVER_IP,
-                       help=f'IP del server PC (default: {PC_SERVER_IP})')
+                        help=f'IP del server PC (default: {PC_SERVER_IP})')
     parser.add_argument('--port', type=int, default=PC_SERVER_PORT,
-                       help=f'Porta server (default: {PC_SERVER_PORT})')
+                        help=f'Porta server (default: {PC_SERVER_PORT})')
     parser.add_argument('--quality', type=int, default=JPEG_QUALITY,
-                       help=f'Qualità JPEG 1-100 (default: {JPEG_QUALITY})')
+                        help=f'Qualità JPEG 1-100 (default: {JPEG_QUALITY})')
     args = parser.parse_args()
     
     if args.quality:

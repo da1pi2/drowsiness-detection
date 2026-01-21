@@ -1,23 +1,22 @@
-# drowsiness_config.py - Configurazioni per versione standalone
-# Raspberry Pi OS Bookworm (64-bit)
+# drowsiness_config_standalone.py
+# Configurazioni per versione standalone con MediaPipe
 
 # ===================== SOGLIE RILEVAMENTO =====================
+# MediaPipe è molto preciso, le soglie standard funzionano bene
 EAR_THRESHOLD = 0.25       # Soglia Eye Aspect Ratio (occhi chiusi se < 0.25)
-EAR_CONSEC_FRAMES = 10     # Frame consecutivi per allarme (ridotto per basso FPS)
+EAR_CONSEC_FRAMES = 10     # Frame consecutivi per allarme
 MAR_THRESHOLD = 0.6        # Soglia Mouth Aspect Ratio per sbadigli
 YAWN_CONSEC_FRAMES = 8     # Frame consecutivi per sbadiglio
 
 # ===================== CAMERA =====================
-# Risoluzione bassa per performance su Pi 3B+
-CAMERA_WIDTH = 320         # Usa 160 per più FPS
-CAMERA_HEIGHT = 240        # Usa 120 per più FPS
-CAMERA_FPS = 15
-
-# ===================== MODELLO =====================
-SHAPE_PREDICTOR_PATH = "shape_predictor_68_face_landmarks.dat"
+# Con MediaPipe possiamo osare una risoluzione leggermente maggiore se vuoi,
+# ma 320x240 resta l'ideale per massimizzare gli FPS su Pi 3B+
+CAMERA_WIDTH = 320
+CAMERA_HEIGHT = 240
+CAMERA_FPS = 20  # Alzato leggermente visto che MediaPipe è più veloce
 
 # ===================== VISUALIZZAZIONE =====================
-SHOW_LANDMARKS = True      # Mostra contorni occhi/bocca
+SHOW_LANDMARKS = True      # Mostra scheletro occhi/bocca
 SHOW_EAR_MAR = True        # Mostra valori EAR/MAR
 DISPLAY_ENABLED = False    # False per versione Lite (senza desktop)
 
