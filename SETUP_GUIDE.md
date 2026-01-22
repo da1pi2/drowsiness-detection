@@ -13,7 +13,7 @@
 ```
 
 Il Raspberry cattura i frame dalla camera e li invia al PC.
-Il PC esegue l'analisi (dlib) e mostra la preview video in tempo reale.
+Il PC esegue l'analisi (dlib o MediaPipe) e mostra la preview video in tempo reale.
 
 ---
 
@@ -21,7 +21,7 @@ Il PC esegue l'analisi (dlib) e mostra la preview video in tempo reale.
 
 ### 1.1 Prerequisiti
 - Python 3.8+ installato
-- Visual Studio Build Tools (per compilare dlib)
+- (Solo per dlib) Visual Studio Build Tools
 
 ### 1.2 Crea Virtual Environment
 
@@ -42,18 +42,22 @@ pip install -r pc_dashboard\requirements_pc.txt
 > ⚠️ **Nota su dlib**: Se l'installazione fallisce:
 > - Scarica CMake: https://cmake.org/download/
 > - Installa VS Build Tools: https://visualstudio.microsoft.com/visual-cpp-build-tools/
+> 
+> 💡 **Alternativa**: Usa la versione **MediaPipe** che non richiede compilazione!
 
-### 1.4 Scarica il Modello dlib
+### 1.4 Scarica il Modello dlib (solo per versione dlib)
 
 ```cmd
 cd pc_dashboard
 
-# Download - salta
+# Download
 powershell -Command "Invoke-WebRequest -Uri 'http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2' -OutFile 'shape_predictor_68_face_landmarks.dat.bz2'"
 
-# Decomprimi - salta
+# Decomprimi
 python -c "import bz2; open('shape_predictor_68_face_landmarks.dat','wb').write(bz2.open('shape_predictor_68_face_landmarks.dat.bz2').read())"
 ```
+
+> 💡 **MediaPipe non richiede download di modelli** - sono inclusi nella libreria!
 
 ### 1.5 Trova l'IP del PC
 
@@ -61,12 +65,36 @@ python -c "import bz2; open('shape_predictor_68_face_landmarks.dat','wb').write(
 ipconfig
 ```
 
-### 1.6 Avvia il Server PC
+### 1.6 Avvia Dashboard/Server PC (solo Streamlit)
 
+**Server + dashboard dlib (riceve dal Raspberry):**
 ```cmd
 venv_pc\Scripts\activate
 cd pc_dashboard
-python pc_server.py
+streamlit run dashboard_server_dlib.py
+```
+
+**Server + dashboard MediaPipe (riceve dal Raspberry, consigliata):**
+```cmd
+venv_pc\Scripts\activate
+cd pc_dashboard
+streamlit run dashboard_server_mediapipe.py
+```
+
+### 1.7 Demo con Webcam (senza Raspberry)
+
+**Dashboard demo MediaPipe (consigliata):**
+```cmd
+venv_pc\Scripts\activate
+cd pc_dashboard
+streamlit run dashboard_demo_mediapipe.py
+```
+
+**Dashboard demo dlib:**
+```cmd
+venv_pc\Scripts\activate
+cd pc_dashboard
+streamlit run dashboard_demo_dlib.py
 ```
 
 ### 🖼️ Preview Video
@@ -118,7 +146,7 @@ pip install --upgrade pip
 ### 2.4 Installa Dipendenze
 
 ```bash
-pip install -r ../requirements_raspberry.txt
+pip install -r requirements_raspberry.txt
 ```
 
 ### 2.5 Configura IP Server
@@ -130,9 +158,16 @@ PC_SERVER_IP = "192.168.1.219"  # <-- IP del tuo PC
 
 ### 2.6 Avvia il Client
 
+**Modalità Client (invia frame al PC):**
 ```bash
 source venv_raspberry/bin/activate
 python raspberry_client.py --server 192.168.1.219
+```
+
+**Modalità Standalone (analisi locale con MediaPipe):**
+```bash
+source venv_raspberry/bin/activate
+python main_raspberry_standalone.py
 ```
 
 ---
@@ -141,31 +176,55 @@ python raspberry_client.py --server 192.168.1.219
 
 ```
 drowsiness-detection/
-├── requirements_file.txt          # Requirements Raspberry
+├── SETUP_GUIDE.md
+├── shared/                              # Moduli condivisi
+│   ├── config.py                        # Configurazioni
+│   └── drowsiness_analyzer.py           # Analyzer MediaPipe
 ├── pc_dashboard/
-│   ├── requirements_pc.txt        # Requirements PC
-│   ├── pc_server.py               # Server + preview
+│   ├── requirements_pc.txt              # Requirements PC
+│   ├── dashboard_demo_dlib.py           # Dashboard demo dlib (webcam PC)
+│   ├── dashboard_demo_mediapipe.py      # Dashboard demo MediaPipe (webcam PC)
+│   ├── dashboard_server_dlib.py         # Dashboard+server dlib (Raspberry -> PC)
+│   ├── dashboard_server_mediapipe.py    # Dashboard+server MediaPipe (Raspberry -> PC)
+│   ├── backup/pc_server.py              # Vecchio server CLI dlib (backup)
+│   ├── backup/pc_server_mediapipe.py    # Vecchio server CLI MediaPipe (backup)
 │   └── shape_predictor_68_face_landmarks.dat
 └── raspberry/
-    └── raspberry_client.py        # Streamer video
+    ├── requirements_raspberry.txt       # Requirements Raspberry
+    ├── raspberry_client.py              # Client (invia frame al PC)
+    └── main_raspberry_standalone.py     # Standalone MediaPipe
 ```
 
 ---
 
 ## 🚀 Avvio Rapido
 
-### PC:
+### PC (server + dashboard MediaPipe - consigliato):
 ```cmd
 cd pc_dashboard
 ..\venv_pc\Scripts\activate
-python pc_server.py
+streamlit run dashboard_server_mediapipe.py
 ```
 
-### Raspberry:
+### PC Demo (webcam locale):
+```cmd
+cd pc_dashboard
+..\venv_pc\Scripts\activate
+streamlit run dashboard_demo_mediapipe.py
+```
+
+### Raspberry (client):
 ```bash
 cd /home/pi/drowsiness-detection/raspberry
 source venv_raspberry/bin/activate
 python raspberry_client.py --server <IP_PC>
+```
+
+### Raspberry (standalone):
+```bash
+cd /home/pi/drowsiness-detection/raspberry
+source venv_raspberry/bin/activate
+python main_raspberry_standalone.py --no-display
 ```
 
 ---

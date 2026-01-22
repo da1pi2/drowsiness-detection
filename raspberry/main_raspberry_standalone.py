@@ -6,8 +6,14 @@ import cv2
 import time
 from datetime import datetime
 import argparse
-import drowsiness_config_standalone as config
-from drowsiness_detector_standalone import DrowsinessDetector
+import sys
+import os
+
+# Aggiungi la cartella parent al path per importare shared
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from shared import config
+from shared.drowsiness_analyzer import DrowsinessAnalyzer
 
 import psutil
 from gpiozero import CPUTemperature
@@ -71,7 +77,7 @@ def main():
     print(" DROWSINESS DETECTION - STANDALONE (MediaPipe)")
     print("="*60)
     
-    detector = DrowsinessDetector()
+    detector = DrowsinessAnalyzer()
     camera, use_picamera2 = init_camera()
     if not camera: return
     
