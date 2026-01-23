@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-main_standalone.py - Versione MediaPipe
+main_standalone.py - MediaPipe Version
 """
 import cv2
 import time
@@ -9,7 +9,7 @@ import argparse
 import sys
 import os
 
-# Aggiungi la cartella parent al path per importare shared
+# Add parent directory to path to import shared modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared import config
@@ -19,8 +19,8 @@ import psutil
 from gpiozero import CPUTemperature
 
 def init_camera():
-    print("[INFO] Inizializzazione camera...")
-    # Prova picamera2
+    print("[INFO] Initializing camera...")
+    # Try picamera2
     try:
         from picamera2 import Picamera2
         camera = Picamera2()
@@ -31,17 +31,17 @@ def init_camera():
         camera.configure(camera_config)
         camera.start()
         time.sleep(0.5)
-        print(f"[INFO] PiCamera2 attiva: {config.CAMERA_WIDTH}x{config.CAMERA_HEIGHT}")
+        print(f"[INFO] PiCamera2 active: {config.CAMERA_WIDTH}x{config.CAMERA_HEIGHT}")
         return camera, True
     except Exception as e:
-        print(f"[WARN] PiCamera2 non usata ({e}), provo OpenCV/USB...")
+        print(f"[WARN] PiCamera2 failed ({e}), trying OpenCV/USB...")
     
-    # Fallback OpenCV
+    # OpenCV Fallback
     cap = cv2.VideoCapture(0)
     cap.set(3, config.CAMERA_WIDTH)
     cap.set(4, config.CAMERA_HEIGHT)
     if not cap.isOpened(): return None, False
-    print("[INFO] Webcam USB attiva")
+    print("[INFO] USB Webcam active")
     return cap, False
 
 def capture_frame(camera, use_picamera2):
@@ -53,22 +53,24 @@ def capture_frame(camera, use_picamera2):
         return frame if ret else None
 
 def get_system_stats():
-    """Restituisce stringa con CPU%, RAM% e Temp°C"""
+    """Returns string with CPU%, RAM%, and Temp°C"""
     try:
-        # Temperatura CPU
+        # CPU Temperature
         cpu_temp = CPUTemperature().temperature
-        # Percentuale utilizzo CPU
+        # CPU Usage Percentage
         cpu_usage = psutil.cpu_percent()
-        # Percentuale utilizzo RAM
+        # RAM Usage Percentage
         ram = psutil.virtual_memory()
         
         return f"CPU: {cpu_usage}% | RAM: {ram.percent}% | Temp: {cpu_temp:.1f}°C"
     except Exception:
         return "Stats N/A"  
 
+# ===================== MAIN =====================
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--no-display', action='store_true', help='Disabilita video output')
+    parser.add_argument('--no-display', action='store_true', help='Disable video output')
     args = parser.parse_args()
     
     if args.no_display: config.DISPLAY_ENABLED = False
@@ -89,31 +91,29 @@ def main():
             frame = capture_frame(camera, use_picamera2)
             if frame is None: continue
             
-            # --- RILEVAMENTO ---
+            # --- DETECTION ---
             processed_frame, ear, mar, is_drowsy, is_yawning = detector.detect(frame)
             frame_count += 1
             
-            # Mostra (solo se abilitato)
+            # Display (only if enabled)
             if config.DISPLAY_ENABLED:
                 cv2.imshow("Drowsiness", processed_frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'): break
             
-            # Log console leggero
+            # Lightweight console log
             if frame_count % 15 == 0:
                 elapsed = time.time() - start_time
                 fps = frame_count / elapsed if elapsed > 0 else 0
-                #fps = frame_count / (time.time() - start_time)
                 
                 sys_stats = get_system_stats()
                 status = "DRWS" if is_drowsy else "OK"
                 yawn_txt = "YAWN" if is_yawning else ""
 
-                #print(f"FPS: {fps:.1f} | EAR: {ear:.2f} | MAR: {mar:.2f} | {status}")
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] "
                       f"FPS: {fps:.1f} | EAR: {ear:.2f} | {status}{yawn_txt} || {sys_stats}")
 
     except KeyboardInterrupt:
-        print("\n[INFO] Stop utente")
+        print("\n[INFO] User stopped")
     finally:
         if use_picamera2: camera.stop()
         else: camera.release()

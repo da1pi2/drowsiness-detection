@@ -1,6 +1,6 @@
 """
-Streamlit Dashboard - Demo Mode (Webcam del PC)
-Usa la webcam del computer, non serve Raspberry
+Streamlit Dashboard - Demo Mode (PC Webcam)
+Uses the computer's webcam, no Raspberry Pi required
 """
 
 import streamlit as st
@@ -14,26 +14,26 @@ import threading
 from datetime import datetime
 from collections import deque
 
-# Configurazione pagina
+# Page configuration
 st.set_page_config(
     page_title="Drowsiness Detection - Demo",
     page_icon="👁️",
     layout="wide"
 )
 
-# Path al modello dlib
+# Path to dlib model
 SHAPE_PREDICTOR_PATH = "shape_predictor_68_face_landmarks.dat"
 EAR_THRESHOLD = 0.25
 MAR_THRESHOLD = 0.6
 
-# Carica il modello una sola volta
+# Load the model once
 @st.cache_resource
 def load_detector():
     detector = dlib.get_frontal_face_detector()
     predictor = dlib.shape_predictor(SHAPE_PREDICTOR_PATH)
     return detector, predictor
 
-# Stato globale
+# Global state
 if 'data' not in st.session_state:
     st.session_state.data = {
         'ear': 0.0,
@@ -57,12 +57,13 @@ if 'running' not in st.session_state:
 
 
 def play_alert():
-    """Emette beep di allarme (Windows)"""
+    """Emits alarm beep (Windows only)"""
     try:
         for _ in range(3):
             winsound.Beep(800, 200)
             time.sleep(0.1)
     except:
+        # winsound is Windows only; this pass avoids errors on Linux/Mac
         pass
 
 
@@ -88,7 +89,7 @@ def shape_to_np(shape):
 
 
 def analyze_frame_webcam(frame, detector, predictor):
-    """Analizza frame dalla webcam"""
+    """Analyzes frame from webcam"""
     d = st.session_state.data
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = detector(gray, 0)
@@ -102,7 +103,7 @@ def analyze_frame_webcam(frame, detector, predictor):
     shape = predictor(gray, face)
     shape_np = shape_to_np(shape)
     
-    # Indici landmark
+    # Landmark indices
     LEFT_EYE = list(range(42, 48))
     RIGHT_EYE = list(range(36, 42))
     MOUTH = list(range(60, 68))
@@ -111,11 +112,11 @@ def analyze_frame_webcam(frame, detector, predictor):
     right_eye = shape_np[RIGHT_EYE]
     mouth = shape_np[MOUTH]
     
-    # Calcola EAR/MAR
+    # Calculate EAR/MAR
     d['ear'] = (eye_aspect_ratio(left_eye) + eye_aspect_ratio(right_eye)) / 2.0
     d['mar'] = mouth_aspect_ratio(mouth)
     
-    # Controlla sonnolenza
+    # Check Drowsiness
     prev_drowsy = d['is_drowsy']
     if d['ear'] < EAR_THRESHOLD:
         d['ear_counter'] += 1
@@ -126,11 +127,11 @@ def analyze_frame_webcam(frame, detector, predictor):
     
     if d['is_drowsy'] and not prev_drowsy:
         d['drowsy_count'] += 1
-        d['events'].appendleft(f"🔴 {datetime.now().strftime('%H:%M:%S')} - SONNOLENZA (EAR: {d['ear']:.3f})")
+        d['events'].appendleft(f"🔴 {datetime.now().strftime('%H:%M:%S')} - DROWSINESS (EAR: {d['ear']:.3f})")
         if not st.session_state.muted:
             threading.Thread(target=play_alert, daemon=True).start()
     
-    # Controlla sbadiglio
+    # Check Yawning
     prev_yawn = d['is_yawning']
     if d['mar'] > MAR_THRESHOLD:
         d['yawn_counter'] += 1
@@ -141,9 +142,9 @@ def analyze_frame_webcam(frame, detector, predictor):
     
     if d['is_yawning'] and not prev_yawn:
         d['yawn_count'] += 1
-        d['events'].appendleft(f"🥱 {datetime.now().strftime('%H:%M:%S')} - SBADIGLIO (MAR: {d['mar']:.3f})")
+        d['events'].appendleft(f"🥱 {datetime.now().strftime('%H:%M:%S')} - YAWN (MAR: {d['mar']:.3f})")
     
-    # Disegna overlay
+    # Draw Overlay
     x, y, w, h = face.left(), face.top(), face.width(), face.height()
     color = (0, 0, 255) if d['is_drowsy'] else (0, 255, 0)
     cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
@@ -153,33 +154,33 @@ def analyze_frame_webcam(frame, detector, predictor):
     cv2.polylines(frame, [right_eye], True, (0, 255, 0), 1)
     cv2.polylines(frame, [mouth], True, (0, 255, 255), 1)
     
-    # Info
+    # Info Text
     cv2.putText(frame, f"EAR: {d['ear']:.2f}", (10, 25),
                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     cv2.putText(frame, f"MAR: {d['mar']:.2f}", (10, 50),
                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     
     if d['is_drowsy']:
-        cv2.putText(frame, "SONNOLENZA!", (10, 80),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        cv2.putText(frame, "DROWSINESS!", (10, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
     if d['is_yawning']:
-        cv2.putText(frame, "SBADIGLIO!", (10, 110),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+        cv2.putText(frame, "YAWN!", (10, 110),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
     
     return frame
 
 
-# === LAYOUT FISSO ===
+# === FIXED LAYOUT ===
 st.title("👁️ Drowsiness Detection - DEMO (Webcam)")
 
 col_ctrl1, col_ctrl2 = st.columns([8, 1])
 with col_ctrl2:
-    st.session_state.muted = st.checkbox("🔇 Muto", value=st.session_state.muted)
+    st.session_state.muted = st.checkbox("🔇 Mute", value=st.session_state.muted)
 
-# Carica modello
+# Load model
 detector, predictor = load_detector()
 
-# Crea placeholders FISSI (una sola volta)
+# Create FIXED placeholders (only once)
 frame_col, events_col = st.columns([1, 1])
 
 with frame_col:
@@ -187,7 +188,7 @@ with frame_col:
     frame_placeholder = st.empty()
 
 with events_col:
-    st.subheader("📋 Avvisi Recenti")
+    st.subheader("📋 Recent Alerts")
     events_placeholder = st.empty()
 
 alert_placeholder = st.empty()
@@ -203,42 +204,42 @@ try:
     while st.session_state.running:
         ret, frame = cap.read()
         if not ret:
-            st.error("Errore nel catturare il frame dalla webcam")
+            st.error("Error capturing frame from webcam")
             break
         
-        # Resize frame a quadrato 300x300
+        # Resize frame to square 300x300
         frame = cv2.resize(frame, (300, 300))
         
-        # Analizza frame
+        # Analyze frame
         frame = analyze_frame_webcam(frame, detector, predictor)
         
-        # Aggiorna SOLO i placeholders (no duplicazione)
+        # Update ONLY placeholders (no duplication)
         with frame_col:
             frame_placeholder.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), width=300)
         
         # Alert banner
         with alert_placeholder.container():
             if d['is_drowsy']:
-                st.error("⚠️ SONNOLENZA RILEVATA!", icon="🚨")
+                st.error("⚠️ DROWSINESS DETECTED!", icon="🚨")
             elif d['is_yawning']:
-                st.warning("🥱 Sbadiglio Rilevato", icon="😴")
+                st.warning("🥱 Yawn Detected", icon="😴")
         
-        # Metriche
+        # Metrics
         with metrics_placeholder.container():
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("Stato", "⚠️ ALLARME" if d['is_drowsy'] else "✅ OK")
+                st.metric("Status", "⚠️ ALERT" if d['is_drowsy'] else "✅ OK")
             with col2:
                 st.metric("EAR", f"{d['ear']:.3f}")
             with col3:
                 st.metric("MAR", f"{d['mar']:.3f}")
             with col4:
-                st.metric("Eventi", f"🔴 {d['drowsy_count']}  🥱 {d['yawn_count']}")
+                st.metric("Events", f"🔴 {d['drowsy_count']}  🥱 {d['yawn_count']}")
         
-        # Durata
+        # Duration
         with duration_placeholder.container():
             duration = datetime.now() - d['start_time']
-            st.caption(f"⏱️ Durata: {str(duration).split('.')[0]}")
+            st.caption(f"⏱️ Duration: {str(duration).split('.')[0]}")
         
         # Events list
         with events_col:
@@ -247,11 +248,11 @@ try:
                     for event in list(d['events'])[:8]:
                         st.text(event)
                 else:
-                    st.caption("Nessun evento")
+                    st.caption("No events")
         
         time.sleep(0.05)
 
 except Exception as e:
-    st.error(f"Errore: {e}")
+    st.error(f"Error: {e}")
 finally:
     cap.release()

@@ -1,22 +1,22 @@
-# Requirements per PC Server
-# Queste librerie sono per il PC (Windows/Linux/Mac)
+# PC Server Requirements
+# These libraries are for the PC (Windows/Linux/Mac)
 
-# ===================== COMUNI =====================
-# Manteniamo NumPy 1.x per stabilità con OpenCV attuale
+# ===================== COMMON (pc server version) =====================
+# Keep NumPy 1.x for stability with current OpenCV
 numpy<2.0.0
-# OpenCV standard
+# Standard OpenCV
 opencv-python
-# Calcolo distanze euclidee
+# Compute euclidean distances
 scipy>=1.7.0
-# Dashboard web
+# Web Dashboard
 streamlit
 
-# ===================== VERSIONE DLIB =====================
-# dlib si compila più facilmente su PC con più RAM
-# Richiede CMake e VS Build Tools su Windows
+# ===================== DLIB VERSION =====================
+# dlib is compiled more easily on PC with more RAM
+# Requires CMake and VS Build Tools on Windows
 dlib>=19.24.0
 
-# ===================== VERSIONE MEDIAPIPE =====================
-# MediaPipe è più facile da installare (no compilazione)
-# Usato da: pc_server_mediapipe.py, streamlit_dashboard_mediapipe.py
+# ===================== MEDIAPIPE VERSION =====================
+# MediaPipe is easier to install (no compilation needed)
+# Used in: pc_server_mediapipe.py, streamlit_dashboard_mediapipe.py
 mediapipe

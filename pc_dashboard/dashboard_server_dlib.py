@@ -1,7 +1,7 @@
 """
-Streamlit Dashboard + Server TCP per Raspberry
-Server completo che riceve frame dal Raspberry e mostra dashboard Streamlit
-Usa questo al posto di pc_server.py quando vuoi la dashboard web
+Streamlit Dashboard + TCP Server for Raspberry Pi
+Complete server that receives frames from Raspberry Pi and displays a Streamlit dashboard.
+CORRECTED: Now displays the video stream.
 """
 
 import streamlit as st
@@ -17,14 +17,14 @@ import threading
 from datetime import datetime
 from collections import deque
 
-# Configurazione pagina
+# Page Configuration
 st.set_page_config(
     page_title="Drowsiness Detection - Server",
     page_icon="👁️",
     layout="wide"
 )
 
-# ===================== CONFIGURAZIONE =====================
+# ===================== CONFIGURATION =====================
 SERVER_HOST = '0.0.0.0'
 SERVER_PORT = 5555
 BUFFER_SIZE = 65536
@@ -34,10 +34,9 @@ EAR_CONSEC_FRAMES = 20
 MAR_THRESHOLD = 0.6
 YAWN_CONSEC_FRAMES = 15
 
-
 # ===================== SHARED DATA =====================
 class SharedData:
-    """Dati condivisi thread-safe tra server TCP e Streamlit"""
+    """Thread-safe shared data between TCP server and Streamlit"""
     
     def __init__(self):
         self.lock = threading.Lock()
@@ -51,29 +50,31 @@ class SharedData:
         self.start_time = datetime.now()
         self.connected = False
         self.frames_processed = 0
+        self.frame = None 
         self._prev_drowsy = False
         self._prev_yawning = False
         self._trigger_alert = False
     
-    def update(self, ear, mar, is_drowsy, is_yawning):
+    def update(self, ear, mar, is_drowsy, is_yawning, frame):
         with self.lock:
             self.ear = ear
             self.mar = mar
             self.is_drowsy = is_drowsy
             self.is_yawning = is_yawning
+            self.frame = frame 
             self.frames_processed += 1
             self.connected = True
             
-            # Nuovo evento sonnolenza
+            # New Drowsiness Event
             if is_drowsy and not self._prev_drowsy:
                 self.drowsy_count += 1
-                self.events.appendleft(f"🔴 {datetime.now().strftime('%H:%M:%S')} - SONNOLENZA (EAR: {ear:.3f})")
+                self.events.appendleft(f"🔴 {datetime.now().strftime('%H:%M:%S')} - DROWSINESS (EAR: {ear:.3f})")
                 self._trigger_alert = True
             
-            # Nuovo evento sbadiglio
+            # New Yawn Event
             if is_yawning and not self._prev_yawning:
                 self.yawn_count += 1
-                self.events.appendleft(f"🥱 {datetime.now().strftime('%H:%M:%S')} - SBADIGLIO (MAR: {mar:.3f})")
+                self.events.appendleft(f"🥱 {datetime.now().strftime('%H:%M:%S')} - YAWN (MAR: {mar:.3f})")
             
             self._prev_drowsy = is_drowsy
             self._prev_yawning = is_yawning
@@ -90,7 +91,8 @@ class SharedData:
                 'events': list(self.events),
                 'start_time': self.start_time,
                 'connected': self.connected,
-                'frames_processed': self.frames_processed
+                'frames_processed': self.frames_processed,
+                'frame': self.frame.copy() if self.frame is not None else None # <--- NEW: Return frame copy
             }
     
     def should_alert(self):
@@ -103,11 +105,10 @@ class SharedData:
     def disconnect(self):
         with self.lock:
             self.connected = False
+            self.frame = None
 
-
-# Istanza globale condivisa
+# Global shared instance
 shared_data = SharedData()
-
 
 # ===================== ANALYZER =====================
 class DrowsinessAnalyzer:
@@ -145,6 +146,10 @@ class DrowsinessAnalyzer:
         ear, mar, is_drowsy, is_yawning = 0.0, 0.0, False, False
         
         for face in faces:
+            # Draw rectangle around face (Optional, for visual debug)
+            x, y, w, h = (face.left(), face.top(), face.width(), face.height())
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
             shape = self.predictor(gray, face)
             shape_np = self.shape_to_np(shape)
             
@@ -155,14 +160,19 @@ class DrowsinessAnalyzer:
             ear = (self.eye_aspect_ratio(left_eye) + self.eye_aspect_ratio(right_eye)) / 2.0
             mar = self.mouth_aspect_ratio(mouth)
             
-            # Sonnolenza
+            # Draw eye and mouth contours on the original frame
+            cv2.polylines(frame, [left_eye], True, (0, 255, 255), 1)
+            cv2.polylines(frame, [right_eye], True, (0, 255, 255), 1)
+            cv2.polylines(frame, [mouth], True, (0, 0, 255), 1)
+
+            # Drowsiness check
             if ear < EAR_THRESHOLD:
                 self.ear_counter += 1
                 is_drowsy = self.ear_counter >= EAR_CONSEC_FRAMES
             else:
                 self.ear_counter = 0
             
-            # Sbadiglio
+            # Yawn check
             if mar > MAR_THRESHOLD:
                 self.yawn_counter += 1
                 is_yawning = self.yawn_counter >= YAWN_CONSEC_FRAMES
@@ -171,12 +181,11 @@ class DrowsinessAnalyzer:
             
             break
         
-        return ear, mar, is_drowsy, is_yawning
-
+        return ear, mar, is_drowsy, is_yawning, frame
 
 # ===================== TCP SERVER =====================
 def tcp_server_thread():
-    """Thread che gestisce il server TCP per ricevere frame dal Raspberry"""
+    """Thread handling the TCP server to receive frames from the Raspberry"""
     global shared_data
     
     analyzer = DrowsinessAnalyzer()
@@ -186,41 +195,44 @@ def tcp_server_thread():
     server_socket.bind((SERVER_HOST, SERVER_PORT))
     server_socket.listen(1)
     
-    print(f"[SERVER] In ascolto su {SERVER_HOST}:{SERVER_PORT}")
+    print(f"[SERVER] Listening on {SERVER_HOST}:{SERVER_PORT}")
     
     while True:
         try:
             client_socket, addr = server_socket.accept()
-            print(f"[SERVER] Client connesso da {addr}")
+            print(f"[SERVER] Client connected from {addr}")
             shared_data.start_time = datetime.now()
             
             while True:
-                # Ricevi dimensione frame
+                # Receive frame size
                 size_data = b''
                 while len(size_data) < 4:
                     chunk = client_socket.recv(4 - len(size_data))
                     if not chunk:
-                        raise ConnectionError("Client disconnesso")
+                        raise ConnectionError("Client disconnected")
                     size_data += chunk
                 
                 frame_size = struct.unpack('>I', size_data)[0]
                 
-                # Ricevi frame
+                # Receive frame
                 frame_data = b''
                 while len(frame_data) < frame_size:
                     chunk = client_socket.recv(min(frame_size - len(frame_data), BUFFER_SIZE))
                     if not chunk:
-                        raise ConnectionError("Client disconnesso")
+                        raise ConnectionError("Client disconnected")
                     frame_data += chunk
                 
-                # Decodifica e analizza
+                # Decode and analyze
                 frame = cv2.imdecode(np.frombuffer(frame_data, dtype=np.uint8), cv2.IMREAD_COLOR)
+                
                 if frame is not None:
-                    ear, mar, is_drowsy, is_yawning = analyzer.analyze(frame)
-                    shared_data.update(ear, mar, is_drowsy, is_yawning)
+                    # Analysis + Draw landmarks on frame
+                    ear, mar, is_drowsy, is_yawning, processed_frame = analyzer.analyze(frame)
+                    # Update shared data INCLUDING FRAME
+                    shared_data.update(ear, mar, is_drowsy, is_yawning, processed_frame)
         
         except Exception as e:
-            print(f"[SERVER] Errore: {e}")
+            print(f"[SERVER] Error: {e}")
             shared_data.disconnect()
         
         finally:
@@ -228,8 +240,7 @@ def tcp_server_thread():
                 client_socket.close()
             except:
                 pass
-            print("[SERVER] In attesa di nuova connessione...")
-
+            print("[SERVER] Waiting for new connection...")
 
 # ===================== AUDIO ALERT =====================
 def play_alert():
@@ -240,10 +251,9 @@ def play_alert():
     except:
         pass
 
-
 # ===================== STREAMLIT UI =====================
 
-# Avvia server TCP in thread separato (una sola volta)
+# Start TCP server in a separate thread (only once)
 if 'server_started' not in st.session_state:
     st.session_state.server_started = True
     threading.Thread(target=tcp_server_thread, daemon=True).start()
@@ -256,76 +266,76 @@ st.title("👁️ Drowsiness Detection - Server (Raspberry)")
 
 col_ctrl1, col_ctrl2 = st.columns([8, 1])
 with col_ctrl2:
-    st.session_state.muted = st.checkbox("🔇 Muto", value=st.session_state.muted)
+    st.session_state.muted = st.checkbox("🔇 Mute", value=st.session_state.muted)
 
-# Info connessione
-st.info(f"📡 Server TCP in ascolto su porta **{SERVER_PORT}** - Connetti il Raspberry a questo PC")
+# Connection Info
+st.info(f"📡 TCP Server listening on port **{SERVER_PORT}** - Connect the Raspberry Pi to this PC")
 
-# Placeholders FISSI
-frame_col, events_col = st.columns([1, 1])
+# Fixed Placeholders
+frame_col, events_col = st.columns([3, 2]) # Slightly widened video space
 
 with frame_col:
-    st.subheader("📹 Stato Connessione")
-    status_placeholder = st.empty()
+    st.subheader("📹 Video Stream")
+    video_placeholder = st.empty() # Placeholder for video
 
 with events_col:
-    st.subheader("📋 Avvisi Recenti")
+    st.subheader("📋 Status & Log")
+    status_placeholder = st.empty()
+    alert_placeholder = st.empty()
+    metrics_placeholder = st.empty()
     events_placeholder = st.empty()
 
-alert_placeholder = st.empty()
-metrics_placeholder = st.empty()
-duration_placeholder = st.empty()
-
-# Loop principale
+# Main Loop
 try:
     while True:
         d = shared_data.get_snapshot()
         
-        # Status connessione
+        # 1. VIDEO DISPLAY
+        with video_placeholder.container():
+            if d['frame'] is not None:
+                # Convert BGR (OpenCV) -> RGB (Streamlit)
+                frame_rgb = cv2.cvtColor(d['frame'], cv2.COLOR_BGR2RGB)
+                st.image(frame_rgb, channels="RGB", use_container_width=True)
+            else:
+                st.image("https://via.placeholder.com/640x480.png?text=Waiting+for+video...", use_container_width=True)
+
+        # 2. CONNECTION STATUS
         with status_placeholder.container():
             if d['connected']:
-                st.success(f"🟢 Raspberry Connesso - Frame: {d['frames_processed']}")
+                st.success(f"🟢 Connected - Frames processed: {d['frames_processed']}")
             else:
-                st.warning("🟡 In attesa di connessione dal Raspberry...")
+                st.warning("🟡 Waiting for Raspberry Pi...")
         
-        # Alert banner
+        # 3. ALERT BANNER
         with alert_placeholder.container():
             if d['is_drowsy']:
-                st.error("⚠️ SONNOLENZA RILEVATA!", icon="🚨")
+                st.error("⚠️ DROWSINESS DETECTED!", icon="🚨")
             elif d['is_yawning']:
-                st.warning("🥱 Sbadiglio Rilevato", icon="😴")
+                st.warning("🥱 Yawn Detected", icon="😴")
+            else:
+                st.markdown("---") # Spacer if everything is OK
         
-        # Audio alert (solo su nuovo evento)
+        # Audio alert
         if shared_data.should_alert() and not st.session_state.muted:
             threading.Thread(target=play_alert, daemon=True).start()
         
-        # Metriche
+        # 4. METRICS
         with metrics_placeholder.container():
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                status = "⚠️ ALLARME" if d['is_drowsy'] else ("✅ OK" if d['connected'] else "⏳ Attesa")
-                st.metric("Stato", status)
-            with col2:
-                st.metric("EAR", f"{d['ear']:.3f}")
-            with col3:
-                st.metric("MAR", f"{d['mar']:.3f}")
-            with col4:
-                st.metric("Eventi", f"🔴 {d['drowsy_count']}  🥱 {d['yawn_count']}")
+            c1, c2 = st.columns(2)
+            c1.metric("EAR (Eyes)", f"{d['ear']:.2f}", delta="-Low" if d['ear'] < EAR_THRESHOLD else None)
+            c2.metric("MAR (Mouth)", f"{d['mar']:.2f}", delta="+High" if d['mar'] > MAR_THRESHOLD else None)
         
-        # Durata
-        with duration_placeholder.container():
-            duration = datetime.now() - d['start_time']
-            st.caption(f"⏱️ Durata: {str(duration).split('.')[0]}")
-        
-        # Events list
+        # 5. EVENTS LIST
         with events_placeholder.container():
+            st.write("##### Event History")
             if d['events']:
-                for event in d['events'][:8]:
+                for event in d['events'][:5]:
                     st.text(event)
             else:
-                st.caption("Nessun evento")
+                st.caption("No recent events")
         
-        time.sleep(0.1)
+        # Small pause to avoid overloading Streamlit CPU render
+        time.sleep(0.05)
 
 except Exception as e:
-    st.error(f"Errore: {e}")
+    st.error(f"UI Error: {e}")

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-raspberry_client.py - Client per Raspberry Pi
-Cattura frame dalla camera e li invia al PC per l'elaborazione.
-Comunicazione unidirezionale: solo invio frame, nessuna ricezione.
+raspberry_client.py - Raspberry Pi Client
+Captures frames from the camera and sends them to the PC for processing.
+Unidirectional communication: only frame transmission, no reception.
 
-Compatibile con Raspberry Pi OS Bookworm (64-bit) - usa picamera2
+Compatible with Raspberry Pi OS Bookworm (64-bit) - uses picamera2
 """
 
 import socket
@@ -15,8 +15,8 @@ import psutil
 from gpiozero import CPUTemperature
 from datetime import datetime
 
-# ===================== CONFIGURAZIONE =====================
-PC_SERVER_IP = "192.168.1.219"  # <-- CAMBIA CON L'IP DEL TUO PC
+# ===================== CONFIGURATION =====================
+PC_SERVER_IP = "192.168.1.219"  # PC'S IP
 PC_SERVER_PORT = 5555
 
 # Camera
@@ -24,16 +24,16 @@ CAMERA_WIDTH = 320
 CAMERA_HEIGHT = 240
 CAMERA_FPS = 15
 
-# Compressione JPEG (70 = buon compromesso qualità/banda)
+# JPEG Compression (70 = good quality/bandwidth compromise)
 JPEG_QUALITY = 70
 
-# Connessione
+# Connection
 CONNECTION_TIMEOUT = 10
 RECONNECT_DELAY = 5
 
 
 class RaspberryClient:
-    """Client che cattura e invia frame al PC (solo trasmissione)"""
+    """Client that captures and sends frames to the PC (transmission only)"""
     
     def __init__(self, server_ip, server_port):
         self.server_ip = server_ip
@@ -45,18 +45,18 @@ class RaspberryClient:
         self.camera = None
         self.use_picamera2 = False
         
-        # Statistiche
+        # Statistics
         self.frames_sent = 0
         self.start_time = None
     
     def get_system_stats(self):
-        """Restituisce stringa con CPU%, RAM% e Temp°C"""
+        """Returns string with CPU%, RAM%, and Temp°C"""
         try:
-            # Temperatura CPU
+            # CPU Temperature
             cpu_temp = CPUTemperature().temperature
-            # Percentuale utilizzo CPU
+            # CPU Usage Percentage
             cpu_usage = psutil.cpu_percent()
-            # Percentuale utilizzo RAM
+            # RAM Usage Percentage
             ram = psutil.virtual_memory()
             
             return f"CPU: {cpu_usage}% | RAM: {ram.percent}% | Temp: {cpu_temp:.1f}°C"
@@ -64,26 +64,26 @@ class RaspberryClient:
             return "Stats N/A"
 
     def connect(self):
-        """Connette al server PC"""
+        """Connects to PC server"""
         try:
-            print(f"[INFO] Connessione a {self.server_ip}:{self.server_port}...")
+            print(f"[INFO] Connecting to {self.server_ip}:{self.server_port}...")
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.settimeout(CONNECTION_TIMEOUT)
             self.socket.connect((self.server_ip, self.server_port))
             self.socket.settimeout(None)
             self.connected = True
-            print("[INFO] Connesso al server!")
+            print("[INFO] Connected to server!")
             return True
         except Exception as e:
-            print(f"[ERRORE] Connessione fallita: {e}")
+            print(f"[ERROR] Connection failed: {e}")
             self.connected = False
             return False
     
     def init_camera(self):
-        """Inizializza la camera (picamera2 per Bookworm o USB fallback)"""
-        print("[INFO] Inizializzazione camera...")
+        """Initializes the camera (picamera2 for Bookworm or USB fallback)"""
+        print("[INFO] Initializing camera...")
         
-        # Prova picamera2 (Bookworm)
+        # Try picamera2 (Bookworm)
         try:
             from picamera2 import Picamera2
             
@@ -97,15 +97,15 @@ class RaspberryClient:
             
             time.sleep(0.5)  # Warmup
             self.use_picamera2 = True
-            print(f"[INFO] PiCamera2 inizializzata: {CAMERA_WIDTH}x{CAMERA_HEIGHT} @ {CAMERA_FPS}fps")
+            print(f"[INFO] PiCamera2 initialized: {CAMERA_WIDTH}x{CAMERA_HEIGHT} @ {CAMERA_FPS}fps")
             return True
             
         except ImportError:
-            print("[WARN] picamera2 non disponibile, provo webcam USB...")
+            print("[WARN] picamera2 not available, trying USB webcam...")
         except Exception as e:
-            print(f"[WARN] Errore PiCamera2: {e}")
+            print(f"[WARN] PiCamera2 error: {e}")
         
-        # Fallback a webcam USB / OpenCV
+        # Fallback to USB webcam / OpenCV
         try:
             self.camera = cv2.VideoCapture(0)
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
@@ -113,17 +113,17 @@ class RaspberryClient:
             self.camera.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
             
             if not self.camera.isOpened():
-                raise Exception("Camera non disponibile")
+                raise Exception("Camera not available")
             
             self.use_picamera2 = False
-            print("[INFO] Webcam USB/OpenCV inizializzata")
+            print("[INFO] USB/OpenCV Webcam initialized")
             return True
         except Exception as e:
-            print(f"[ERRORE] Impossibile inizializzare camera: {e}")
+            print(f"[ERROR] Unable to initialize camera: {e}")
             return False
     
     def capture_frame(self):
-        """Cattura un frame dalla camera"""
+        """Captures a frame from the camera"""
         if self.use_picamera2:
             frame = self.camera.capture_array()
             return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
@@ -132,76 +132,76 @@ class RaspberryClient:
             return frame if ret else None
     
     def send_frame(self, frame):
-        """Invia frame compresso al server"""
+        """Sends compressed frame to the server"""
         try:
-            # Comprimi in JPEG
+            # Compress to JPEG
             encode_param = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
             _, encoded = cv2.imencode('.jpg', frame, encode_param)
             data = encoded.tobytes()
             
-            # Invia: [4 byte dimensione] + [dati JPEG]
+            # Send: [4 bytes size] + [JPEG data]
             self.socket.sendall(struct.pack('>I', len(data)) + data)
             return True
         except Exception as e:
-            print(f"[ERRORE] Invio frame: {e}")
+            print(f"[ERROR] Sending frame: {e}")
             return False
     
     def run(self):
-        """Loop principale"""
+        """Main loop"""
         print("=" * 60)
         print("  DROWSINESS DETECTION - RASPBERRY STREAMER")
-        print("  (Solo cattura e invio frame)")
+        print("  (Frame capture and transmission only)")
         print("=" * 60)
         
-        # Inizializza camera
+        # Initialize camera
         if not self.init_camera():
             return
         
-        # Connetti al server (con retry)
+        # Connect to server (with retry)
         while not self.connected:
             if not self.connect():
-                print(f"[INFO] Riprovo tra {RECONNECT_DELAY} secondi...")
+                print(f"[INFO] Retrying in {RECONNECT_DELAY} seconds...")
                 time.sleep(RECONNECT_DELAY)
         
         self.start_time = time.time()
-        print("\n[INFO] Streaming attivo! Premi Ctrl+C per uscire")
+        print("\n[INFO] Streaming active! Press Ctrl+C to exit")
         print("-" * 60)
         
         try:
             while self.connected:
-                # Cattura frame
+                # Capture frame
                 frame = self.capture_frame()
                 if frame is None:
                     continue
                 
-                # Invia al server
+                # Send to server
                 if not self.send_frame(frame):
-                    print("[WARN] Invio fallito, riconnessione...")
+                    print("[WARN] Transmission failed, reconnecting...")
                     self.connected = False
                     break
                 
                 self.frames_sent += 1
                 
-                # Log periodico (ogni 30 frame -> circa ogni 2 secondi a 15fps)
+                # Periodic log (every 30 frames -> approx every 2 seconds at 15fps)
                 if self.frames_sent % 30 == 0:
                     elapsed = time.time() - self.start_time
                     fps = self.frames_sent / elapsed if elapsed > 0 else 0
                     
-                    # Ottieni stats sistema
+                    # Get system stats
                     sys_stats = self.get_system_stats()
                     
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] "
                           f"FPS: {fps:.1f} | Frame: {self.frames_sent} || {sys_stats}")
         
         except KeyboardInterrupt:
-            print("\n[INFO] Interruzione da tastiera")
+            print("\n[INFO] Keyboard interrupt")
         
         finally:
             self.cleanup()
     
     def cleanup(self):
-        """Pulizia risorse"""
-        print("\n[INFO] Chiusura...")
+        """Resource cleanup"""
+        print("\n[INFO] Closing...")
         
         if self.socket:
             self.socket.close()
@@ -216,10 +216,10 @@ class RaspberryClient:
         fps = self.frames_sent / elapsed if elapsed > 0 else 0
         
         print("\n" + "=" * 60)
-        print("STATISTICHE:")
-        print(f"  Frame inviati: {self.frames_sent}")
-        print(f"  Tempo totale: {elapsed:.1f}s")
-        print(f"  FPS medio: {fps:.1f}")
+        print("STATISTICS:")
+        print(f"  Frames sent: {self.frames_sent}")
+        print(f"  Total time: {elapsed:.1f}s")
+        print(f"  Average FPS: {fps:.1f}")
         print("=" * 60)
 
 
@@ -228,13 +228,13 @@ class RaspberryClient:
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description='Raspberry Streamer per Drowsiness Detection')
+    parser = argparse.ArgumentParser(description='Raspberry Streamer for Drowsiness Detection')
     parser.add_argument('--server', type=str, default=PC_SERVER_IP,
-                        help=f'IP del server PC (default: {PC_SERVER_IP})')
+                        help=f'PC Server IP (default: {PC_SERVER_IP})')
     parser.add_argument('--port', type=int, default=PC_SERVER_PORT,
-                        help=f'Porta server (default: {PC_SERVER_PORT})')
+                        help=f'Server Port (default: {PC_SERVER_PORT})')
     parser.add_argument('--quality', type=int, default=JPEG_QUALITY,
-                        help=f'Qualità JPEG 1-100 (default: {JPEG_QUALITY})')
+                        help=f'JPEG Quality 1-100 (default: {JPEG_QUALITY})')
     args = parser.parse_args()
     
     if args.quality:

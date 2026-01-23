@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-drowsiness_analyzer.py - Analyzer MediaPipe per drowsiness detection
-Modulo condiviso usato sia dal PC Server che dal Raspberry standalone.
-Compatibile con MediaPipe >= 0.10.0 (nuova API tasks)
+drowsiness_analyzer.py - MediaPipe Analyzer for Drowsiness Detection
+Shared module used by both the PC Server and the Standalone Raspberry Pi.
+Compatible with MediaPipe >= 0.10.0 (new tasks API).
 """
 
 import cv2
@@ -10,54 +10,54 @@ import numpy as np
 from scipy.spatial import distance
 from datetime import datetime
 
-# Import config dalla stessa cartella shared
+# Import config from the same 'shared' folder
 try:
-    from . import config  # Quando importato come package
+    from . import config  # When imported as a package
 except ImportError:
-    import config  # Quando eseguito direttamente
+    import config  # When executed directly
 
-# Prova la nuova API (MediaPipe >= 0.10.0)
+# Try the new API (MediaPipe >= 0.10.0)
 import mediapipe as mp
 
-# Verifica quale API è disponibile
+# Check which API is available
 USE_NEW_API = not hasattr(mp, 'solutions')
 
 
 class DrowsinessAnalyzer:
-    """Analyzer di sonnolenza basato su MediaPipe Face Mesh"""
+    """Drowsiness analyzer based on MediaPipe Face Mesh"""
     
     def __init__(self):
-        print("[INFO] Caricamento MediaPipe Face Mesh...")
+        print("[INFO] Loading MediaPipe Face Mesh...")
         
         if USE_NEW_API:
             self._init_new_api()
         else:
             self._init_legacy_api()
         
-        # INDICI MEDIAPIPE (diversi da dlib)
-        # Occhio Sinistro (punti chiave per EAR)
+        # MEDIAPIPE INDICES (different from dlib)
+        # Left Eye (key points for EAR)
         self.LEFT_EYE = [33, 160, 158, 133, 153, 144]
-        # Occhio Destro
+        # Right Eye
         self.RIGHT_EYE = [362, 385, 387, 263, 373, 380]
-        # Bocca (punti chiave per MAR: sopra, sotto, sinistra, destra)
+        # Mouth (key points for MAR: top, bottom, left, right)
         self.MOUTH = [13, 14, 61, 291] 
         
-        # Contatori
+        # Counters
         self.ear_counter = 0
         self.yawn_counter = 0
         self.total_drowsy_events = 0
         self.total_yawn_events = 0
         
-        print("[INFO] Analyzer MediaPipe pronto!")
+        print("[INFO] MediaPipe Analyzer ready!")
     
     def _init_new_api(self):
-        """Inizializza con la nuova API MediaPipe Tasks (>= 0.10.0)"""
+        """Initializes with the new MediaPipe Tasks API (>= 0.10.0)"""
         from mediapipe.tasks import python as mp_python
         from mediapipe.tasks.python import vision
         
-        print("[INFO] Usando MediaPipe Tasks API (nuova)")
+        print("[INFO] Using MediaPipe Tasks API (New)")
         
-        # Usa FaceLandmarker dalla nuova API
+        # Use FaceLandmarker from the new API
         base_options = mp_python.BaseOptions(
             model_asset_path=self._get_model_path()
         )
@@ -72,8 +72,8 @@ class DrowsinessAnalyzer:
         self.use_new_api = True
     
     def _init_legacy_api(self):
-        """Inizializza con la vecchia API MediaPipe solutions (< 0.10.0)"""
-        print("[INFO] Usando MediaPipe Solutions API (legacy)")
+        """Initializes with the old MediaPipe Solutions API (< 0.10.0)"""
+        print("[INFO] Using MediaPipe Solutions API (Legacy)")
         
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(
@@ -85,51 +85,51 @@ class DrowsinessAnalyzer:
         self.use_new_api = False
     
     def _get_model_path(self):
-        """Ottiene il path del modello per la nuova API"""
+        """Gets the model path for the new API"""
         import os
         
-        # Cerca il modello nella cartella del modulo
+        # Look for the model in the module folder
         module_dir = os.path.dirname(os.path.abspath(__file__))
         model_path = os.path.join(module_dir, "face_landmarker.task")
         
         if os.path.exists(model_path):
             return model_path
         
-        # Scarica il modello se non esiste
-        print("[INFO] Scaricamento modello face_landmarker.task...")
+        # Download the model if it doesn't exist
+        print("[INFO] Downloading face_landmarker.task model...")
         import urllib.request
         url = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
         urllib.request.urlretrieve(url, model_path)
-        print(f"[INFO] Modello salvato in: {model_path}")
+        print(f"[INFO] Model saved at: {model_path}")
         
         return model_path
     
     def eye_aspect_ratio(self, landmarks, indices):
-        """Calcola EAR dati i landmark specifici"""
+        """Calculates EAR given specific landmarks """
         pts = [landmarks[i] for i in indices]
         
-        # Calcola distanze verticali
+        # Calculate vertical distances
         A = distance.euclidean(pts[1], pts[5])
         B = distance.euclidean(pts[2], pts[4])
-        # Calcola distanza orizzontale
+        # Calculate horizontal distance
         C = distance.euclidean(pts[0], pts[3])
         
         if C == 0: return 0.0
         return (A + B) / (2.0 * C)
     
     def mouth_aspect_ratio(self, landmarks, indices):
-        """Calcola MAR (distanza verticale / orizzontale)"""
+        """Calculates MAR (vertical distance / horizontal distance)"""
         pts = [landmarks[i] for i in indices]
         
         # pts[0]=Top(13), pts[1]=Bottom(14), pts[2]=Left(61), pts[3]=Right(291)
-        A = distance.euclidean(pts[0], pts[1])  # Verticale
-        C = distance.euclidean(pts[2], pts[3])  # Orizzontale
+        A = distance.euclidean(pts[0], pts[1])  # Vertical
+        C = distance.euclidean(pts[2], pts[3])  # Horizontal
         
         if C == 0: return 0.0
         return A / C
     
     def _process_frame_new_api(self, frame):
-        """Processa frame con la nuova API"""
+        """Processes frame with the new API"""
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
         result = self.face_landmarker.detect(mp_image)
@@ -142,7 +142,7 @@ class DrowsinessAnalyzer:
         return None
     
     def _process_frame_legacy_api(self, frame):
-        """Processa frame con la vecchia API"""
+        """Processes frame with the legacy API"""
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.face_mesh.process(rgb_frame)
         
@@ -155,12 +155,12 @@ class DrowsinessAnalyzer:
     
     def detect(self, frame):
         """
-        Rileva sonnolenza nel frame usando MediaPipe.
-        Returns: (frame_processato, ear, mar, is_drowsy, is_yawning)
+        Detects drowsiness in the frame using MediaPipe.
+        Returns: (processed_frame, ear, mar, is_drowsy, is_yawning)
         """
         h, w = frame.shape[:2]
         
-        # Processa con l'API appropriata
+        # Process with the appropriate API
         if self.use_new_api:
             landmarks_np = self._process_frame_new_api(frame)
         else:
@@ -172,17 +172,17 @@ class DrowsinessAnalyzer:
         is_yawning = False
         
         if landmarks_np is not None:
-            # Calcola EAR
+            # Calculate EAR
             left_ear = self.eye_aspect_ratio(landmarks_np, self.LEFT_EYE)
             right_ear = self.eye_aspect_ratio(landmarks_np, self.RIGHT_EYE)
             ear = (left_ear + right_ear) / 2.0
             
-            # Calcola MAR
+            # Calculate MAR
             mar = self.mouth_aspect_ratio(landmarks_np, self.MOUTH)
             
-            # --- LOGICA RILEVAMENTO ---
+            # --- DETECTION LOGIC ---
             
-            # Sonnolenza
+            # Drowsiness
             if ear < config.EAR_THRESHOLD:
                 self.ear_counter += 1
                 if self.ear_counter >= config.EAR_CONSEC_FRAMES:
@@ -190,11 +190,11 @@ class DrowsinessAnalyzer:
                     if self.ear_counter == config.EAR_CONSEC_FRAMES:
                         self.total_drowsy_events += 1
                         self._log_event("DROWSINESS_DETECTED")
-                        print(f"[⚠️ ALLARME] SONNOLENZA! Evento #{self.total_drowsy_events}")
+                        print(f"[⚠️ ALERT] DROWSINESS! Event #{self.total_drowsy_events}")
             else:
                 self.ear_counter = 0
             
-            # Sbadiglio
+            # Yawning
             if mar > config.MAR_THRESHOLD:
                 self.yawn_counter += 1
                 if self.yawn_counter >= config.YAWN_CONSEC_FRAMES:
@@ -202,33 +202,33 @@ class DrowsinessAnalyzer:
                     if self.yawn_counter == config.YAWN_CONSEC_FRAMES:
                         self.total_yawn_events += 1
                         self._log_event("YAWN_DETECTED")
-                        print(f"[🥱 INFO] SBADIGLIO! Evento #{self.total_yawn_events}")
+                        print(f"[🥱 INFO] YAWN! Event #{self.total_yawn_events}")
             else:
                 self.yawn_counter = 0
             
-            # --- DISEGNO ---
+            # --- DRAWING ---
             if config.SHOW_LANDMARKS:
                 color_drowsy = (0, 0, 255) if is_drowsy else (0, 255, 0)
                 color_yawn = (0, 0, 255) if is_yawning else (0, 255, 255)
                 
-                # Disegna occhi
+                # Draw Eyes 
                 for idx in self.LEFT_EYE:
                     cv2.circle(frame, tuple(landmarks_np[idx]), 1, color_drowsy, -1)
                 for idx in self.RIGHT_EYE:
                     cv2.circle(frame, tuple(landmarks_np[idx]), 1, color_drowsy, -1)
-                # Disegna bocca
+                # Draw Mouth 
                 for idx in self.MOUTH:
                     cv2.circle(frame, tuple(landmarks_np[idx]), 2, color_yawn, -1)
 
-            # Mostra Info a video
+            # Show Info on video
             if config.SHOW_EAR_MAR:
                 cv2.putText(frame, f"EAR: {ear:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 cv2.putText(frame, f"MAR: {mar:.2f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             
             if is_drowsy:
-                cv2.putText(frame, "SONNOLENZA!", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                cv2.putText(frame, "DROWSINESS!", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
             if is_yawning:
-                cv2.putText(frame, "SBADIGLIO!", (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+                cv2.putText(frame, "YAWN!", (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
         
         return frame, ear, mar, is_drowsy, is_yawning
 
