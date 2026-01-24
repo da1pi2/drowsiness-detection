@@ -14,23 +14,13 @@ import time
 import psutil
 from gpiozero import CPUTemperature
 from datetime import datetime
+import sys
+import os
 
-# ===================== CONFIGURATION =====================
-PC_SERVER_IP = "192.168.1.219"  # PC'S IP
-PC_SERVER_PORT = 5555
+# Add parent directory to path to import shared modules
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Camera
-CAMERA_WIDTH = 320
-CAMERA_HEIGHT = 240
-CAMERA_FPS = 15
-
-# JPEG Compression (70 = good quality/bandwidth compromise)
-JPEG_QUALITY = 70
-
-# Connection
-CONNECTION_TIMEOUT = 10
-RECONNECT_DELAY = 5
-
+from shared import config
 
 class RaspberryClient:
     """Client that captures and sends frames to the PC (transmission only)"""
@@ -68,7 +58,7 @@ class RaspberryClient:
         try:
             print(f"[INFO] Connecting to {self.server_ip}:{self.server_port}...")
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.settimeout(CONNECTION_TIMEOUT)
+            self.socket.settimeout(config.CONNECTION_TIMEOUT)
             self.socket.connect((self.server_ip, self.server_port))
             self.socket.settimeout(None)
             self.connected = True
@@ -89,15 +79,15 @@ class RaspberryClient:
             
             self.camera = Picamera2()
             camera_config = self.camera.create_video_configuration(
-                main={"size": (CAMERA_WIDTH, CAMERA_HEIGHT), "format": "RGB888"},
-                controls={"FrameRate": CAMERA_FPS}
+                main={"size": (config.CAMERA_WIDTH, config.CAMERA_HEIGHT), "format": "RGB888"},
+                controls={"FrameRate": config.CAMERA_FPS}
             )
             self.camera.configure(camera_config)
             self.camera.start()
             
             time.sleep(0.5)  # Warmup
             self.use_picamera2 = True
-            print(f"[INFO] PiCamera2 initialized: {CAMERA_WIDTH}x{CAMERA_HEIGHT} @ {CAMERA_FPS}fps")
+            print(f"[INFO] PiCamera2 initialized: {config.CAMERA_WIDTH}x{config.CAMERA_HEIGHT} @ {config.CAMERA_FPS}fps")
             return True
             
         except ImportError:
@@ -108,9 +98,9 @@ class RaspberryClient:
         # Fallback to USB webcam / OpenCV
         try:
             self.camera = cv2.VideoCapture(0)
-            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
-            self.camera.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
+            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
+            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
+            self.camera.set(cv2.CAP_PROP_FPS, config.CAMERA_FPS)
             
             if not self.camera.isOpened():
                 raise Exception("Camera not available")
@@ -135,7 +125,7 @@ class RaspberryClient:
         """Sends compressed frame to the server"""
         try:
             # Compress to JPEG
-            encode_param = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
+            encode_param = [cv2.IMWRITE_JPEG_QUALITY, config.JPEG_QUALITY]
             _, encoded = cv2.imencode('.jpg', frame, encode_param)
             data = encoded.tobytes()
             
@@ -160,8 +150,8 @@ class RaspberryClient:
         # Connect to server (with retry)
         while not self.connected:
             if not self.connect():
-                print(f"[INFO] Retrying in {RECONNECT_DELAY} seconds...")
-                time.sleep(RECONNECT_DELAY)
+                print(f"[INFO] Retrying in {config.RECONNECT_DELAY} seconds...")
+                time.sleep(config.RECONNECT_DELAY)
         
         self.start_time = time.time()
         print("\n[INFO] Streaming active! Press Ctrl+C to exit")
@@ -229,16 +219,16 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description='Raspberry Streamer for Drowsiness Detection')
-    parser.add_argument('--server', type=str, default=PC_SERVER_IP,
-                        help=f'PC Server IP (default: {PC_SERVER_IP})')
-    parser.add_argument('--port', type=int, default=PC_SERVER_PORT,
-                        help=f'Server Port (default: {PC_SERVER_PORT})')
-    parser.add_argument('--quality', type=int, default=JPEG_QUALITY,
-                        help=f'JPEG Quality 1-100 (default: {JPEG_QUALITY})')
+    parser.add_argument('--server', type=str, default=config.PC_SERVER_IP,
+                        help=f'PC Server IP (default: {config.PC_SERVER_IP})')
+    parser.add_argument('--port', type=int, default=config.PC_SERVER_PORT,
+                        help=f'Server Port (default: {config.PC_SERVER_PORT})')
+    parser.add_argument('--quality', type=int, default=config.JPEG_QUALITY,
+                        help=f'JPEG Quality 1-100 (default: {config.JPEG_QUALITY})')
     args = parser.parse_args()
     
     if args.quality:
-        JPEG_QUALITY = args.quality
+        config.JPEG_QUALITY = args.quality
     
     client = RaspberryClient(args.server, args.port)
     client.run()
