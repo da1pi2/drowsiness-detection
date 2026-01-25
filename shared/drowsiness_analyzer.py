@@ -5,10 +5,19 @@ Shared module used by both the PC Server and the Standalone Raspberry Pi.
 Compatible with MediaPipe >= 0.10.0 (new tasks API).
 """
 
+import os
+import json
 import cv2
 import numpy as np
 from scipy.spatial import distance
 from datetime import datetime
+
+# SILENCE MEDIAPIPE LOGS
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = '3'
+os.environ['GLOG_minloglevel'] = '3' 
+os.environ["GLOG_logtostderr"] = '0'
+os.environ['MAGLEV_HTTP_RESOLVER'] = '0'
+os.environ['ABSL_LOG_LEVEL'] = 'error'
 
 # Import config from the same 'shared' folder
 try:
@@ -34,6 +43,9 @@ class DrowsinessAnalyzer:
         else:
             self._init_legacy_api()
         
+        self.config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ear_config.json")
+        self.ear_threshold = self.load_threshold()
+
         # MEDIAPIPE INDICES (different from dlib)
         # Left Eye (key points for EAR)
         self.LEFT_EYE = [33, 160, 158, 133, 153, 144]
@@ -104,6 +116,28 @@ class DrowsinessAnalyzer:
         
         return model_path
     
+    def load_threshold(self):
+        """Loads the threshold from JSON or uses the default from config.py"""
+        if os.path.exists(self.config_path):
+            try:
+                with open(self.config_path, 'r') as f:
+                    data = json.load(f)
+                    print(f"[INFO] Loaded custom EAR threshold: {data['threshold']:.2f}")
+                    return data['threshold']
+            except Exception as e:
+                print(f"[WARN] Error loading config: {e}")
+        return config.EAR_THRESHOLD
+
+    def save_threshold(self, value):
+        """Saves the new threshold to a shared JSON file"""
+        self.ear_threshold = value
+        try:
+            with open(self.config_path, 'w') as f:
+                json.dump({"threshold": value, "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}, f)
+            print(f"[INFO] Threshold saved to {self.config_path}")
+        except Exception as e:
+            print(f"[ERROR] Could not save threshold: {e}")
+
     def eye_aspect_ratio(self, landmarks, indices):
         """Calculates EAR given specific landmarks """
         pts = [landmarks[i] for i in indices]
@@ -183,7 +217,7 @@ class DrowsinessAnalyzer:
             # --- DETECTION LOGIC ---
             
             # Drowsiness
-            if ear < config.EAR_THRESHOLD:
+            if ear < self.ear_threshold:
                 self.ear_counter += 1
                 if self.ear_counter >= config.EAR_CONSEC_FRAMES:
                     is_drowsy = True

@@ -106,7 +106,7 @@ state = SharedState()
 
 
 def tcp_server_loop():
-    """Receives frames from Raspberry Pi and updates shared state."""
+    """Receives frames from Raspberry Pi and updates shared state."""   
     analyzer = DrowsinessAnalyzer()
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -117,6 +117,7 @@ def tcp_server_loop():
     while True:
         try:
             client_socket, addr = server_socket.accept()
+            analyzer.ear_threshold = analyzer.load_threshold()  # Reload threshold on new connection
             print(f"[SERVER] Client connected from {addr}")
             state.start_time = datetime.now()
 

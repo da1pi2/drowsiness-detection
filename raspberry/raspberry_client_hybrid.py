@@ -11,6 +11,12 @@ from gpiozero import CPUTemperature
 from datetime import datetime
 import sys
 
+# Suppress MediaPipe/TF Lite logging (0=all, 1=info, 2=warnings, 3=errors)
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = '3'
+os.environ['GLOG_minloglevel'] = '3' 
+os.environ["GLOG_logtostderr"] = '0'
+os.environ['MAGLEV_HTTP_RESOLVER'] = '0'
+
 # Add parent directory to path to import shared modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared import config
@@ -37,6 +43,52 @@ class SmartRaspberryClient:
         self.frame_count = 0
         self.start_time = time.time()
         
+    def run_calibration(self, analyzer):
+        """10-second initial setup to personalize EAR threshold"""
+        print("\n" + "="*60)
+        print(" INITIAL SETUP - EAR CALIBRATION")
+        print("="*60)
+        
+        # Check for existing config
+        #temp_analyzer = DrowsinessAnalyzer()
+        existing_threshold = analyzer.load_threshold()
+        
+        if os.path.exists(analyzer.config_path):
+            choice = input(f"[PROMPT] Found saved threshold ({existing_threshold:.2f}). Use previous? (y/n): ")
+            if choice.lower() == 'y':
+                print("[INFO] Using existing configuration.")
+                return
+
+        print("\n[ACTION] Please look at the camera with a normal expression.")
+        print("[ACTION] Keep your eyes naturally open for 10 seconds.")
+        time.sleep(2)
+        
+        ear_values = []
+        start_time = time.time()
+        
+        while time.time() - start_time < 10:
+            frame = self.capture_frame()
+            if frame is not None:
+                # Use detect just to get the EAR value
+                _, ear, _, _, _ = analyzer.detect(frame)
+                if ear > 0.1: # Avoid garbage values if face is not detected
+                    ear_values.append(ear)
+                
+                remaining = 10 - int(time.time() - start_time)
+                print(f"Calibrating... {remaining}s remaining | Current EAR: {ear:.2f}", end="\r")
+        
+        if len(ear_values) > 0:
+            avg_ear = sum(ear_values) / len(ear_values)
+            # Threshold set at 75% of average open-eye EAR
+            new_threshold = avg_ear * 0.75 
+            analyzer.save_threshold(new_threshold)
+            print(f"\n[SUCCESS] Calibration complete! Average EAR: {avg_ear:.2f}")
+            print(f"[SUCCESS] New Alert Threshold: {new_threshold:.2f}")
+        else:
+            print("\n[ERROR] Calibration failed: No face detected. Using defaults.")
+        
+        print("="*60 + "\n")
+
     def get_system_stats(self):
         try:
             cpu_temp = CPUTemperature().temperature
@@ -107,6 +159,19 @@ class SmartRaspberryClient:
     def run(self):
         if not self.init_camera(): return
         
+        print("[SYSTEM] Starting MediaPipe engine...")
+        startup_analyzer = DrowsinessAnalyzer()
+
+        # --- WARM-UP STEP ---
+        # Catturiamo un frame e lo processiamo subito per far uscire i warning di MediaPipe/TFLite
+        print("[SYSTEM] Warming up landmarks engine...")
+        dummy_frame = self.capture_frame()
+        if dummy_frame is not None:
+            startup_analyzer.detect(dummy_frame) # Questo scatena i warning
+
+        # START CALIBRATION BEFORE THE MAIN LOOP
+        self.run_calibration(startup_analyzer)
+
         print("="*60)
         print(" DROWSINESS DETECTION")
         print("="*60)
@@ -132,7 +197,8 @@ class SmartRaspberryClient:
                 else:
                     mode_label = "STNDAL" # Standalone
                     if self.local_detector is None:
-                        self.local_detector = DrowsinessAnalyzer()
+                        #self.local_detector = DrowsinessAnalyzer()
+                        self.local_detector = startup_analyzer
                         self.start_time = time.time()
                         self.frame_count = 0
                     
