@@ -1,3 +1,4 @@
+"""raspberry_client_hybrid.py"""
 import os
 # Suppress MediaPipe/TF Lite logging (only show errors)
 os.environ['GLOG_minloglevel'] = '2'
@@ -65,22 +66,36 @@ class SmartRaspberryClient:
         
         ear_values = []
         start_time = time.time()
+        calibration_duration = 10 # Secondi richiesti
         
-        while time.time() - start_time < 10:
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed >= calibration_duration:
+                break # Calibrazione completata con successo
+                
             frame = self.capture_frame()
             if frame is not None:
-                # Use detect just to get the EAR value
-                _, ear, _, _, _ = analyzer.detect(frame)
-                if ear > 0.1: # Avoid garbage values if face is not detected
-                    ear_values.append(ear)
+                # Riceve i 6 valori dall'analyzer aggiornato
+                _, ear, _, _, _, face_detected = analyzer.detect(frame)
                 
-                remaining = 10 - int(time.time() - start_time)
-                print(f"Calibrating... {remaining}s remaining | Current EAR: {ear:.2f}", end="\r")
+                if face_detected:
+                    if ear > 0.1:
+                        ear_values.append(ear)
+                    
+                    remaining = calibration_duration - int(elapsed)
+                    print(f"Calibrating... {remaining}s remaining | Current EAR: {ear:.2f}      ", end="\r")
+                else:
+                    # RESET: Se il viso viene perso, resetta timer e campioni
+                    if elapsed > 0.5: # Evita reset per micro-glitch istantanei
+                        print("\n[⚠️ RESET] Face lost! Restarting 10s timer...          ")
+                        ear_values = []
+                        start_time = time.time()
+                        time.sleep(1) # Breve pausa per permettere all'utente di posizionarsi
         
         if len(ear_values) > 0:
             avg_ear = sum(ear_values) / len(ear_values)
-            # Threshold set at 75% of average open-eye EAR
-            new_threshold = avg_ear * 0.75 
+            # Threshold set at 85% of average open-eye EAR
+            new_threshold = avg_ear * 0.85
             analyzer.save_threshold(new_threshold)
             print(f"\n[SUCCESS] Calibration complete! Average EAR: {avg_ear:.2f}")
             print(f"[SUCCESS] New Alert Threshold: {new_threshold:.2f}")
@@ -194,6 +209,8 @@ class SmartRaspberryClient:
                     mode_label = "CLIENT"
                     if not self.send_frame(frame):
                         print("\n[LOST] Connection lost! Loading local analyzer...")
+                    else:
+                        status_label = "STREAMING"
                 else:
                     mode_label = "STNDAL" # Standalone
                     if self.local_detector is None:
@@ -201,11 +218,13 @@ class SmartRaspberryClient:
                         self.local_detector = startup_analyzer
                         self.start_time = time.time()
                         self.frame_count = 0
-                    
-                    processed, ear, mar, drowsy, yawn = self.local_detector.detect(frame)
+
+                    processed, ear, mar, drowsy, yawn, face = self.local_detector.detect(frame)
                     current_ear = ear
-                    if drowsy: status_label = "DRWS!"
+                    if not face: status_label = "!!! NO FACE !!!"
+                    elif drowsy: status_label = "DRWS!"
                     elif yawn: status_label = "YAWN"
+                    else: status_label = "OK"
 
                     if config.DISPLAY_ENABLED:
                         cv2.imshow("Raspberry Standalone", processed)

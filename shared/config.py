@@ -9,9 +9,9 @@ RECONNECT_DELAY = 5
 
 # ===================== DETECTION THRESHOLDS (Standalone-only) =====================
 # MediaPipe is very accurate, standard thresholds work well
-EAR_THRESHOLD = 0.25       # Eye Aspect Ratio threshold (eyes closed if < 0.25)
+EAR_THRESHOLD = 0.25       # Default Eye Aspect Ratio threshold (eyes closed if < 0.25)
 EAR_CONSEC_FRAMES = 10     # Consecutive frames for alert
-MAR_THRESHOLD = 0.6        # Mouth Aspect Ratio threshold for yawning
+MAR_THRESHOLD = 0.6        # Default Mouth Aspect Ratio threshold for yawning
 YAWN_CONSEC_FRAMES = 8     # Consecutive frames for yawn detection
 # ===================== CAMERA (Both standalone and server)===================================
 # With MediaPipe we can dare a slightly higher resolution if we want,

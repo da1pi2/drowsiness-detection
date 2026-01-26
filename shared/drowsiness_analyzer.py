@@ -59,6 +59,8 @@ class DrowsinessAnalyzer:
         self.yawn_counter = 0
         self.total_drowsy_events = 0
         self.total_yawn_events = 0
+        self.face_lost_counter = 0
+        self.face_lost_threshold = config.CAMERA_FPS # 1 second of lost face
         
         print("[INFO] MediaPipe Analyzer ready!")
     
@@ -90,9 +92,9 @@ class DrowsinessAnalyzer:
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(
             max_num_faces=1,
-            refine_landmarks=False,
+            refine_landmarks=True, # To improve mouth and eye landmarks on standalone version
             min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
+            min_tracking_confidence=0.5,
         )
         self.use_new_api = False
     
@@ -204,14 +206,13 @@ class DrowsinessAnalyzer:
         mar = 0.0
         is_drowsy = False
         is_yawning = False
+        face_detected = landmarks_np is not None
         
         if landmarks_np is not None:
             # Calculate EAR
             left_ear = self.eye_aspect_ratio(landmarks_np, self.LEFT_EYE)
             right_ear = self.eye_aspect_ratio(landmarks_np, self.RIGHT_EYE)
             ear = (left_ear + right_ear) / 2.0
-            
-            # Calculate MAR
             mar = self.mouth_aspect_ratio(landmarks_np, self.MOUTH)
             
             # --- DETECTION LOGIC ---
@@ -263,8 +264,30 @@ class DrowsinessAnalyzer:
                 cv2.putText(frame, "DROWSINESS!", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
             if is_yawning:
                 cv2.putText(frame, "YAWN!", (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-        
-        return frame, ear, mar, is_drowsy, is_yawning
+        else:
+            # No face detected
+            self.face_lost_counter += 1
+
+            if self.face_lost_counter > self.face_lost_threshold:
+                face_detected = False
+                self.face_lost_counter = 0
+                # Disegno l'alert sul frame solo dopo il ritardo
+                text = "!!! FACE LOST !!!"
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                scale = 1.2
+                thickness = 3
+                # Calcola la posizione centrale
+                (text_w, text_h), baseline = cv2.getTextSize(text, font, scale, thickness)
+
+                x = (w - text_w) // 2
+                y = (h + text_h) // 2   # +text_h perché OpenCV usa il baseline
+
+                cv2.putText(frame, text, (x, y),
+                            font, scale, (0, 0, 255), thickness)
+            else:
+                face_detected = True
+            
+        return frame, ear, mar, is_drowsy, is_yawning, face_detected
 
     def _log_event(self, event_type):
         if not config.LOG_EVENTS: return
