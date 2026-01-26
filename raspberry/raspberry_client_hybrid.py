@@ -209,17 +209,14 @@ class SmartRaspberryClient:
                     mode_label = "CLIENT"
                     if not self.send_frame(frame):
                         print("\n[LOST] Connection lost! Loading local analyzer...")
-                    else:
-                        status_label = "STREAMING"
                 else:
                     mode_label = "STNDAL" # Standalone
                     if self.local_detector is None:
-                        #self.local_detector = DrowsinessAnalyzer()
                         self.local_detector = startup_analyzer
                         self.start_time = time.time()
                         self.frame_count = 0
 
-                    processed, ear, mar, drowsy, yawn, face = self.local_detector.detect(frame)
+                    processed, ear, mar, drowsy, yawn, face, score = self.local_detector.detect(frame)
                     current_ear = ear
                     if not face: status_label = "!!! NO FACE !!!"
                     elif drowsy: status_label = "DRWS!"
@@ -238,9 +235,10 @@ class SmartRaspberryClient:
 
                     # EAR is shown only in Standalone (in Client the PC computes it)
                     ear_str = f"EAR: {current_ear:.2f}" if not self.connected else "EAR: PC-Side"
+                    score = f"SCORE: {score:.1f}" if not self.connected else "SCORE: PC-Side"
                     
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] "
-                          f"MODE: {mode_label} | FPS: {fps:.1f} | {ear_str} | {status_label} || {sys_stats}")
+                          f"MODE: {mode_label} | {score} | FPS: {fps:.1f} | {ear_str} | {status_label} || {sys_stats}")
 
         except KeyboardInterrupt:
             print("\n[STOP] User interrupted")

@@ -146,7 +146,7 @@ def tcp_server_loop():
                     continue
                 
                 # Process with MediaPipe
-                processed, ear, mar, is_drowsy, is_yawning, face_detected = analyzer.detect(frame)
+                processed, ear, mar, is_drowsy, is_yawning, face_detected, _ = analyzer.detect(frame)
                 
                 # Prepare preview
                 preview = cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)

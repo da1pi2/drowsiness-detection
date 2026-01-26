@@ -61,9 +61,52 @@ class DrowsinessAnalyzer:
         self.total_yawn_events = 0
         self.face_lost_counter = 0
         self.face_lost_threshold = config.CAMERA_FPS # 1 second of lost face
-        
+        self.drowsiness_score = 0.0
+
         print("[INFO] MediaPipe Analyzer ready!")
     
+    def calculate_drowsiness_score(self, ear, mar):
+        """
+        Calcola uno score composito di sonnolenza (0-100).
+        Combina EAR (occhi chiusi), durata occhi chiusi, MAR (sbadigli), e durata sbadigli.
+        
+        Args:
+            ear: Eye Aspect Ratio (0-0.5)
+            mar: Mouth Aspect Ratio (0-1.0)
+            ear_counter: numero di frame consecutivi occhi chiusi
+            yawn_counter: numero di frame consecutivi bocca aperta
+        
+        Returns:
+            score: 0-100 (100 = massima sonnolenza)
+        """
+        # 1. Score EAR (occhi chiusi)
+        # Normalizza EAR rispetto alla soglia
+        ear_value_score = max(0, (config.EAR_THRESHOLD - ear) / self.ear_threshold) * 100
+        ear_value_score = min(ear_value_score, 100)
+        
+        # 2. Score durata occhi chiusi
+        # Massimizza quando raggiunge EAR_CONSEC_FRAMES
+        ear_duration_score = min(100, (self.total_drowsy_events / config.EAR_CONSEC_FRAMES) * 100)
+        
+        # Combina EAR value + duration (50% + 50%)
+        ear_total_score = (ear_value_score * 0.5) + (ear_duration_score * 0.5)
+        
+        # 3. Score MAR (sbadigli)
+        mar_value_score = max(0, (mar - config.MAR_THRESHOLD) / (1.0 - config.MAR_THRESHOLD)) * 100
+        mar_value_score = min(mar_value_score, 100)
+        
+        # 4. Score durata sbadagli
+        yawn_duration_score = min(100, (self.total_yawn_events / config.YAWN_CONSEC_FRAMES) * 100)
+        
+        # Combina MAR value + duration (50% + 50%)
+        mar_total_score = (mar_value_score * 0.5) + (yawn_duration_score * 0.5)
+        
+        # 5. Punteggio finale
+        # 80% occhi chiusi, 20% sbadigli
+        drowsiness_score = (ear_total_score * 0.8) + (mar_total_score * 0.2)
+        
+        return drowsiness_score
+
     def _init_new_api(self):
         """Initializes with the new MediaPipe Tasks API (>= 0.10.0)"""
         from mediapipe.tasks import python as mp_python
@@ -209,6 +252,7 @@ class DrowsinessAnalyzer:
         face_detected = landmarks_np is not None
         
         if landmarks_np is not None:
+            self.face_lost_counter = 0
             # Calculate EAR
             left_ear = self.eye_aspect_ratio(landmarks_np, self.LEFT_EYE)
             right_ear = self.eye_aspect_ratio(landmarks_np, self.RIGHT_EYE)
@@ -217,6 +261,9 @@ class DrowsinessAnalyzer:
             
             # --- DETECTION LOGIC ---
             
+            # Calcola score composito
+            new_drowsiness_score = self.calculate_drowsiness_score(ear, mar)
+
             # Drowsiness
             if ear < self.ear_threshold:
                 self.ear_counter += 1
@@ -224,8 +271,9 @@ class DrowsinessAnalyzer:
                     is_drowsy = True
                     if self.ear_counter == config.EAR_CONSEC_FRAMES:
                         self.total_drowsy_events += 1
+                        self.drowsiness_score = new_drowsiness_score
                         self._log_event("DROWSINESS_DETECTED")
-                        print(f"[⚠️ ALERT] DROWSINESS! Event #{self.total_drowsy_events}")
+                        print(f"[⚠️ ALERT] DROWSINESS! Event #{self.total_drowsy_events} (Score: {self.drowsiness_score:.1f})")
             else:
                 self.ear_counter = 0
             
@@ -236,8 +284,9 @@ class DrowsinessAnalyzer:
                     is_yawning = True
                     if self.yawn_counter == config.YAWN_CONSEC_FRAMES:
                         self.total_yawn_events += 1
+                        self.drowsiness_score = new_drowsiness_score
                         self._log_event("YAWN_DETECTED")
-                        print(f"[🥱 INFO] YAWN! Event #{self.total_yawn_events}")
+                        print(f"[🥱 INFO] YAWN! Event #{self.total_yawn_events} (Score: {self.drowsiness_score:.1f})")
             else:
                 self.yawn_counter = 0
             
@@ -259,17 +308,17 @@ class DrowsinessAnalyzer:
             if config.SHOW_EAR_MAR:
                 cv2.putText(frame, f"EAR: {ear:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 cv2.putText(frame, f"MAR: {mar:.2f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            
+                cv2.putText(frame, f"Score: {self.drowsiness_score:.1f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             if is_drowsy:
-                cv2.putText(frame, "DROWSINESS!", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                cv2.putText(frame, "DROWSINESS!", (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
             if is_yawning:
-                cv2.putText(frame, "YAWN!", (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+                cv2.putText(frame, "YAWN!", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
         else:
             # No face detected
             self.face_lost_counter += 1
 
             if self.face_lost_counter > self.face_lost_threshold:
-                face_detected = False
+                #face_detected = False
                 self.face_lost_counter = 0
                 # Disegno l'alert sul frame solo dopo il ritardo
                 text = "!!! FACE LOST !!!"
@@ -280,14 +329,14 @@ class DrowsinessAnalyzer:
                 (text_w, text_h), baseline = cv2.getTextSize(text, font, scale, thickness)
 
                 x = (w - text_w) // 2
-                y = (h + text_h) // 2   # +text_h perché OpenCV usa il baseline
+                y = (h + text_h) // 2  
 
                 cv2.putText(frame, text, (x, y),
                             font, scale, (0, 0, 255), thickness)
-            else:
-                face_detected = True
+            #else:
+                #face_detected = True
             
-        return frame, ear, mar, is_drowsy, is_yawning, face_detected
+        return frame, ear, mar, is_drowsy, is_yawning, face_detected, self.drowsiness_score
 
     def _log_event(self, event_type):
         if not config.LOG_EVENTS: return
