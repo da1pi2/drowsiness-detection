@@ -17,6 +17,7 @@ import struct
 import cv2
 import time
 import psutil
+import json
 import streamlit as st
 import threading
 from datetime import datetime
@@ -39,6 +40,18 @@ try:
     HAS_GPIOZERO = True
 except ImportError:
     HAS_GPIOZERO = False
+
+def get_local_ip():
+    """Get the actual local IP address of the Raspberry Pi"""
+    try:
+        # Create a socket to determine the outgoing IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))  # Doesn't actually send data
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        return "127.0.0.1"
 
 st.set_page_config(page_title="Drowsiness - Raspberry Standalone", page_icon="🍓", layout="wide")
 
@@ -257,11 +270,35 @@ class HybridClient:
         ret, frame = self.camera.read()
         return frame if ret else None
 
-    def send_frame(self, frame):
+    def send_frame_with_stats(self, frame):
+        """
+        Send frame + system stats to server.
+        Protocol: [4 bytes stats_size][JSON stats][4 bytes frame_size][JPEG frame]
+        """
         try:
+            # Get current system stats
+            elapsed = time.time() - self.start_time
+            fps = self.frame_count / elapsed if elapsed > 0 else 0
+            cpu_temp, cpu_usage, ram = self.get_system_stats()
+            
+            # Prepare stats JSON
+            stats = {
+                'cpu_temp': cpu_temp,
+                'cpu_usage': cpu_usage,
+                'ram_usage': ram,
+                'fps': fps
+            }
+            stats_json = json.dumps(stats).encode('utf-8')
+            
+            # Encode frame
             _, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, config.JPEG_QUALITY])
-            data = encoded.tobytes()
-            self.socket.sendall(struct.pack('>I', len(data)) + data)
+            frame_data = encoded.tobytes()
+            
+            # Send: stats_size + stats + frame_size + frame
+            self.socket.sendall(struct.pack('>I', len(stats_json)))
+            self.socket.sendall(stats_json)
+            self.socket.sendall(struct.pack('>I', len(frame_data)))
+            self.socket.sendall(frame_data)
             return True
         except:
             self.connected = False
@@ -368,8 +405,8 @@ class HybridClient:
 
                 # OPERATIONAL LOGIC
                 if self.connected:
-                    # CLIENT MODE - Send frame to PC server
-                    if not self.send_frame(frame):
+                    # CLIENT MODE - Send frame + stats to PC server
+                    if not self.send_frame_with_stats(frame):
                         # Connection lost, will switch back to standalone
                         self.state.reset_for_standalone()
                         self.frame_count = 0
@@ -405,12 +442,32 @@ class HybridClient:
             self.camera.release()
 
 def play_beep():
-    """Play alert sound (works on different platforms)"""
+    """Play alert sound (works on Linux/Raspberry Pi)"""
     try:
-        # Try Linux beep
-        os.system('aplay -q /usr/share/sounds/alsa/Front_Center.wav 2>/dev/null || beep 2>/dev/null || echo -e "\a"')
+        import subprocess
+        # Try multiple methods for Linux audio alert
+        # 1. Try aplay with ALSA
+        result = subprocess.run(
+            ['aplay', '-q', '/usr/share/sounds/alsa/Front_Center.wav'],
+            capture_output=True, timeout=2
+        )
+        if result.returncode != 0:
+            # 2. Try speaker-test for a beep
+            subprocess.run(['speaker-test', '-t', 'sine', '-f', '800', '-l', '1'], 
+                          capture_output=True, timeout=1)
     except:
-        pass
+        try:
+            # 3. Fallback: system beep
+            os.system('echo -e "\\a"')
+        except:
+            pass
+
+# Get local IP for display
+LOCAL_IP = get_local_ip()
+print(f"\n{'='*60}")
+print(f"  🍓 RASPBERRY PI DASHBOARD")
+print(f"  Access from PC browser: http://{LOCAL_IP}:8501")
+print(f"{'='*60}\n")
 
 # Start client thread
 if 'client_thread' not in st.session_state:
@@ -424,7 +481,7 @@ if 'muted' not in st.session_state:
 
 # ===================== UI LAYOUT =====================
 st.title("🍓 Drowsiness Detection - Raspberry Pi")
-st.caption(f"📡 Hybrid Mode: Standalone processing with auto-connect to PC server ({config.PC_SERVER_IP}:{config.PC_SERVER_PORT})")
+st.caption(f"📡 Dashboard accessible at: **http://{LOCAL_IP}:8501** | Auto-connect to PC server ({config.PC_SERVER_IP}:{config.PC_SERVER_PORT})")
 
 ctrl_col, calib_col, mute_col = st.columns([6, 2, 1])
 with calib_col:

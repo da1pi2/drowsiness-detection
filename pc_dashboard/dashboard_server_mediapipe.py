@@ -1,6 +1,7 @@
 """
 Streamlit Dashboard + TCP Server (MediaPipe) - OPTIMIZED VERSION
 Fixes: FPS calculation, buffering latency with frame skipping
+Now receives system stats from Raspberry Pi
 """
 import socket
 import struct
@@ -9,6 +10,7 @@ import numpy as np
 import streamlit as st
 import threading
 import time
+import json
 from datetime import datetime
 from collections import deque
 import sys
@@ -47,6 +49,12 @@ class SharedState:
         self._prev_drowsy = False
         self._prev_yawn = False
         self._trigger_alert = False
+        # Raspberry Pi stats
+        self.rpi_cpu_temp = 0.0
+        self.rpi_cpu_usage = 0.0
+        self.rpi_ram_usage = 0.0
+        self.rpi_fps = 0.0
+        self.rpi_ip = ""
 
     def update(self, ear, mar, is_drowsy, is_yawning, face_detected, frame_rgb):
         with self.lock:
@@ -70,6 +78,15 @@ class SharedState:
             self._prev_drowsy = is_drowsy
             self._prev_yawn = is_yawning
 
+    def update_rpi_stats(self, cpu_temp, cpu_usage, ram_usage, fps, ip=""):
+        with self.lock:
+            self.rpi_cpu_temp = cpu_temp
+            self.rpi_cpu_usage = cpu_usage
+            self.rpi_ram_usage = ram_usage
+            self.rpi_fps = fps
+            if ip:
+                self.rpi_ip = ip
+
     def snapshot(self):
         with self.lock:
             return {
@@ -85,6 +102,11 @@ class SharedState:
                 "connected": self.connected,
                 "frames_processed": self.frames_processed,
                 "last_frame": self.last_frame.copy() if self.last_frame is not None else None,
+                "rpi_cpu_temp": self.rpi_cpu_temp,
+                "rpi_cpu_usage": self.rpi_cpu_usage,
+                "rpi_ram_usage": self.rpi_ram_usage,
+                "rpi_fps": self.rpi_fps,
+                "rpi_ip": self.rpi_ip,
             }
 
     def should_alert(self):
@@ -98,7 +120,10 @@ class SharedState:
         with self.lock:
             self.connected = False
             self.last_frame = None
-            self.server_fps = 0.0
+            self.rpi_fps = 0.0
+            self.rpi_cpu_temp = 0.0
+            self.rpi_cpu_usage = 0.0
+            self.rpi_ram_usage = 0.0
 
 state = SharedState()
 
@@ -113,7 +138,10 @@ def _recv_exact(sock, size):
     return data
 
 def tcp_server_loop():
-    """Receives frames from Raspberry Pi with frame skipping to reduce latency"""
+    """
+    Receives frames + stats from Raspberry Pi.
+    Protocol: [4 bytes stats_size][JSON stats][4 bytes frame_size][JPEG frame]
+    """
     analyzer = DrowsinessAnalyzer()
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -128,15 +156,40 @@ def tcp_server_loop():
             analyzer.ear_threshold = analyzer.load_threshold()
             print(f"[SERVER] Client connected from {addr}")
             state.start_time = datetime.now()
+            state.update_rpi_stats(0, 0, 0, 0, addr[0])  # Store client IP
             analyzer.ear_counter = 0
             analyzer.yawn_counter = 0
             
             while True:
-                size_data = _recv_exact(client_socket, 4)
-                if not size_data:
+                # 1. Read stats JSON size
+                stats_size_data = _recv_exact(client_socket, 4)
+                if not stats_size_data:
                     raise ConnectionError("Client disconnected")
+                stats_size = struct.unpack('>I', stats_size_data)[0]
                 
-                frame_size = struct.unpack('>I', size_data)[0]
+                # 2. Read stats JSON
+                stats_data = _recv_exact(client_socket, stats_size)
+                if not stats_data:
+                    raise ConnectionError("Incomplete stats")
+                
+                try:
+                    rpi_stats = json.loads(stats_data.decode('utf-8'))
+                    state.update_rpi_stats(
+                        rpi_stats.get('cpu_temp', 0),
+                        rpi_stats.get('cpu_usage', 0),
+                        rpi_stats.get('ram_usage', 0),
+                        rpi_stats.get('fps', 0)
+                    )
+                except:
+                    pass
+                
+                # 3. Read frame size
+                frame_size_data = _recv_exact(client_socket, 4)
+                if not frame_size_data:
+                    raise ConnectionError("Client disconnected")
+                frame_size = struct.unpack('>I', frame_size_data)[0]
+                
+                # 4. Read frame data
                 frame_data = _recv_exact(client_socket, frame_size)
                 if not frame_data:
                     raise ConnectionError("Incomplete frame")
@@ -149,7 +202,6 @@ def tcp_server_loop():
                 processed, ear, mar, is_drowsy, is_yawning, face_detected, _ = analyzer.detect(frame)
                 
                 # Prepare preview
-                #preview = cv2.cvtColor(processed, cv2.COLOR_RGB2BGR)
                 preview = cv2.resize(processed, (320, 240))
                 
                 state.update(ear, mar, is_drowsy, is_yawning, face_detected, preview)
@@ -208,7 +260,7 @@ while True:
     # Connection Status
     with info_placeholder.container():
         if snap["connected"]:
-            st.success(f"🟢 Raspberry Connected - Frames: {snap['frames_processed']}")
+            st.success(f"🟢 Raspberry Connected ({snap['rpi_ip']}) - Frames: {snap['frames_processed']}")
         else:
             st.warning("🟡 Waiting for Raspberry Pi connection...")
     
@@ -242,6 +294,16 @@ while True:
         c2.metric("EAR", f"{snap['ear']:.3f}")
         c3.metric("MAR", f"{snap['mar']:.3f}")
         c4.metric("Events", f"🔴 {snap['drowsy_count']}  🥱 {snap['yawn_count']}")
+    
+    # Raspberry Pi System Stats
+    with st.container():
+        if snap["connected"]:
+            st.caption("🍓 Raspberry Pi Stats")
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("RPi FPS", f"{snap['rpi_fps']:.1f}")
+            r2.metric("RPi CPU", f"{snap['rpi_cpu_usage']:.1f}%")
+            r3.metric("RPi RAM", f"{snap['rpi_ram_usage']:.1f}%")
+            r4.metric("RPi Temp", f"{snap['rpi_cpu_temp']:.1f}°C" if snap['rpi_cpu_temp'] > 0 else "N/A")
     
     # Event Log
     with events_placeholder.container():
