@@ -285,7 +285,16 @@ class HybridClient:
     def run_calibration(self):
         """Simple 10-second calibration to personalize EAR threshold"""
         self.state.start_calibration()
-        print("[CALIBRATION] Starting 10s calibration - keep eyes open naturally")
+        print("[CALIBRATION] Starting in 3 seconds - position yourself in front of camera")
+        
+        # 3-second countdown before starting
+        for i in range(3, 0, -1):
+            frame = self.capture_frame()
+            if frame is not None:
+                processed, _, _, _, _, _, _ = self.analyzer.detect(frame)
+                preview = cv2.resize(processed, (320, 240))
+                self.state.update_calibration(i, f"Starting in {i}s - position yourself...", preview)
+            time.sleep(1)
         
         ear_values = []
         start_time = time.time()
@@ -306,11 +315,17 @@ class HybridClient:
             
             remaining = calibration_duration - int(elapsed)
             
-            # Collect EAR values when face is detected and eyes are open
             if face_detected and ear > 0.1:
                 ear_values.append(ear)
+                message = f"Calibrating... {remaining}s | Samples: {len(ear_values)}"
+            else:
+                # Face lost - reset calibration
+                if elapsed > 0.5 and len(ear_values) > 0:
+                    print("[CALIBRATION] Face lost! Restarting...")
+                    ear_values = []
+                    start_time = time.time()
+                message = f"⚠️ Face not detected! {remaining}s"
             
-            message = f"Calibrating... {remaining}s | Samples: {len(ear_values)}"
             self.state.update_calibration(remaining, message, preview)
         
         # Calculate and save threshold
@@ -452,10 +467,11 @@ while True:
         else:
             st.warning("🟡 Initializing...")
     
-    # Calibration UI
-    with calibration_placeholder.container():
-        if snap["calibrating"]:
-            st.warning(f"🎯 {snap['calibration_message']}")
+    # Calibration UI - only show when calibrating, clear when done
+    if snap["calibrating"]:
+        calibration_placeholder.warning(f"🎯 {snap['calibration_message']}")
+    else:
+        calibration_placeholder.empty()
     
     # Video Feed
     if snap["calibrating"] and snap["last_frame"] is not None:

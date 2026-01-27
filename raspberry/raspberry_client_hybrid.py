@@ -8,6 +8,7 @@ import struct
 import cv2
 import time
 import psutil
+import json
 from gpiozero import CPUTemperature
 from datetime import datetime
 import sys
@@ -108,10 +109,11 @@ class SmartRaspberryClient:
         try:
             cpu_temp = CPUTemperature().temperature
             cpu_usage = psutil.cpu_percent(percpu=True)
-            cpu_usage = sum(cpu_usage)
+            cpu_usage = sum(cpu_usage)  # Sum of all cores
             ram = psutil.virtual_memory().percent
-            return f"CPU: {cpu_usage}% | RAM: {ram}% | Temp: {cpu_temp:.1f}C"
-        except: return "Stats N/A"
+            return cpu_temp, cpu_usage, ram
+        except:
+            return 0.0, 0.0, 0.0
 
     def connect_to_server(self):
         now = time.time()
@@ -161,15 +163,42 @@ class SmartRaspberryClient:
         ret, frame = self.camera.read()
         return frame if ret else None
 
-    def send_frame(self, frame):
+    def send_frame_with_stats(self, frame, send_stats=False):
+        """
+        Send frame + system stats to server.
+        Protocol: [4 bytes stats_size][JSON stats][4 bytes frame_size][JPEG frame]
+        Se send_stats=False, invia solo il frame (stats_size=0)
+        """
         try:
+            if send_stats:
+                # Get current system stats
+                elapsed = time.time() - self.start_time
+                fps = self.frame_count / elapsed if elapsed > 0 else 0
+                cpu_temp, cpu_usage, ram = self.get_system_stats()
+                # Prepare stats JSON
+                stats = {
+                    'cpu_temp': cpu_temp,
+                    'cpu_usage': cpu_usage,
+                    'ram_usage': ram,
+                    'fps': fps
+                }
+                stats_json = json.dumps(stats).encode('utf-8')
+            else:
+                # No stats - send empty JSON
+                stats_json = b'{}'
+            # Encode frame
             _, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, config.JPEG_QUALITY])
-            data = encoded.tobytes()
-            self.socket.sendall(struct.pack('>I', len(data)) + data)
+            frame_data = encoded.tobytes()
+            # Send: stats_size + stats + frame_size + frame
+            self.socket.sendall(struct.pack('>I', len(stats_json)))
+            self.socket.sendall(stats_json)
+            self.socket.sendall(struct.pack('>I', len(frame_data)))
+            self.socket.sendall(frame_data)
             return True
         except:
             self.connected = False
-            if self.socket: self.socket.close()
+            if self.socket:
+                self.socket.close()
             return False
 
     def run(self):
@@ -208,7 +237,9 @@ class SmartRaspberryClient:
                 # 2. OPERATIONAL LOGIC
                 if self.connected:
                     mode_label = "CLIENT"
-                    if not self.send_frame(frame):
+                    # Send stats only every CAMERA_FPS frames (once per second)
+                    send_stats = (self.frame_count % config.CAMERA_FPS == 0)
+                    if not self.send_frame_with_stats(frame, send_stats):
                         print("\n[LOST] Connection lost! Loading local analyzer...")
                 else:
                     mode_label = "STNDAL" # Standalone
@@ -232,14 +263,15 @@ class SmartRaspberryClient:
                 if self.frame_count % config.CAMERA_FPS == 0:
                     elapsed = time.time() - self.start_time
                     fps = self.frame_count / elapsed if elapsed > 0 else 0
-                    sys_stats = self.get_system_stats()
+                    cpu_temp, cpu_usage, ram = self.get_system_stats()
+                    sys_stats = f"CPU: {cpu_usage:.1f}% | RAM: {ram:.1f}% | Temp: {cpu_temp:.1f}C"
 
                     # EAR is shown only in Standalone (in Client the PC computes it)
                     ear_str = f"EAR: {current_ear:.2f}" if not self.connected else "EAR: PC-Side"
-                    score = f"SCORE: {score:.1f}" if not self.connected else "SCORE: PC-Side"
+                    score_str = f"SCORE: {score:.1f}" if not self.connected else "SCORE: PC-Side"
                     
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] "
-                          f"MODE: {mode_label} | {score} | FPS: {fps:.1f} | {ear_str} | {status_label} || {sys_stats}")
+                          f"MODE: {mode_label} | {score_str} | FPS: {fps:.1f} | {ear_str} | {status_label} || {sys_stats}")
 
         except KeyboardInterrupt:
             print("\n[STOP] User interrupted")
