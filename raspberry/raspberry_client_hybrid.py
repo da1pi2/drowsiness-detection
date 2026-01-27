@@ -107,7 +107,8 @@ class SmartRaspberryClient:
     def get_system_stats(self):
         try:
             cpu_temp = CPUTemperature().temperature
-            cpu_usage = psutil.cpu_percent()
+            cpu_usage = psutil.cpu_percent(percpu=True)
+            cpu_usage = sum(cpu_usage)
             ram = psutil.virtual_memory().percent
             return f"CPU: {cpu_usage}% | RAM: {ram}% | Temp: {cpu_temp:.1f}C"
         except: return "Stats N/A"

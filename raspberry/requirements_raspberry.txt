@@ -15,3 +15,4 @@ picamera2>=0.3.0
 #scipy>=1.10.0 OLD
 mediapipe
 scipy
+streamlit
