@@ -223,7 +223,7 @@ class SmartRaspberryClient:
                     elif yawn: status_label = "YAWN"
                     else: status_label = "OK"
 
-                    if config.DISPLAY_ENABLED:
+                    if config.DISPLAY_ENABLED: #? in standalone perchè display abilitato?
                         cv2.imshow("Raspberry Standalone", processed)
                         if cv2.waitKey(1) & 0xFF == ord('q'): break
 

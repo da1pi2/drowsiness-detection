@@ -41,6 +41,8 @@ if 'data' not in st.session_state:
     st.session_state.data = {
         'ear': 0.0,
         'mar': 0.0,
+        'drowsiness_score': 0.0,  # NUOVO
+        'face_detected': True,      # NUOVO
         'is_drowsy': False,
         'is_yawning': False,
         'drowsy_count': 0,
@@ -73,8 +75,8 @@ def analyze_frame_webcam(frame, analyzer):
     """Analyzes frame from webcam using MediaPipe"""
     d = st.session_state.data
     
-    # Use the analyzer's detect method
-    processed_frame, ear, mar, is_drowsy, is_yawning = analyzer.detect(frame)
+    # Use the analyzer's detect method - ORA RITORNA 7 VALORI
+    processed_frame, ear, mar, is_drowsy, is_yawning, face_detected, drowsiness_score = analyzer.detect(frame)
     
     # Update state
     prev_drowsy = d['is_drowsy']
@@ -82,13 +84,15 @@ def analyze_frame_webcam(frame, analyzer):
     
     d['ear'] = ear
     d['mar'] = mar
+    d['drowsiness_score'] = drowsiness_score  # NUOVO
+    d['face_detected'] = face_detected          # NUOVO
     d['is_drowsy'] = is_drowsy
     d['is_yawning'] = is_yawning
     
     # Check for new drowsiness events
     if is_drowsy and not prev_drowsy:
         d['drowsy_count'] += 1
-        d['events'].appendleft(f"🔴 {datetime.now().strftime('%H:%M:%S')} - DROWSINESS (EAR: {ear:.3f})")
+        d['events'].appendleft(f"🔴 {datetime.now().strftime('%H:%M:%S')} - DROWSINESS (Score: {drowsiness_score:.1f})")
         if not st.session_state.muted:
             threading.Thread(target=play_alert, daemon=True).start()
     
@@ -149,14 +153,18 @@ try:
         
         # Alert banner
         with alert_placeholder.container():
-            if d['is_drowsy']:
+            if not d['face_detected']:  # NUOVO - alert face lost
+                st.error("🚨 FACE NOT DETECTED - PLEASE ADJUST CAMERA", icon="👤")
+            elif d['is_drowsy']:
                 st.error("⚠️ DROWSINESS DETECTED!", icon="🚨")
             elif d['is_yawning']:
                 st.warning("🥱 Yawn Detected", icon="😴")
+            else:
+                st.info("✅ Face detected - Monitoring active")  # NUOVO - feedback positivo
         
         # Metrics
         with metrics_placeholder.container():
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3, col4, col5 = st.columns(5)  # AGGIUNTA 5a colonna
             with col1:
                 st.metric("Status", "⚠️ ALERT" if d['is_drowsy'] else "✅ OK")
             with col2:
@@ -164,6 +172,8 @@ try:
             with col3:
                 st.metric("MAR", f"{d['mar']:.3f}")
             with col4:
+                st.metric("Score", f"{d['drowsiness_score']:.1f}")  # NUOVO
+            with col5:
                 st.metric("Events", f"🔴 {d['drowsy_count']}  🥱 {d['yawn_count']}")
         
         # Duration

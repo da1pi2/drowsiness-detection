@@ -81,7 +81,7 @@ class DrowsinessAnalyzer:
         """
         # 1. Score EAR (occhi chiusi)
         # Normalizza EAR rispetto alla soglia
-        ear_value_score = max(0, (config.EAR_THRESHOLD - ear) / self.ear_threshold) * 100
+        ear_value_score = max(0, (self.ear_threshold - ear) / self.ear_threshold) * 100
         ear_value_score = min(ear_value_score, 100)
         
         # 2. Score durata occhi chiusi
@@ -107,6 +107,7 @@ class DrowsinessAnalyzer:
         
         return drowsiness_score
 
+    #?Non bastano solo nuove?
     def _init_new_api(self):
         """Initializes with the new MediaPipe Tasks API (>= 0.10.0)"""
         from mediapipe.tasks import python as mp_python
