@@ -107,6 +107,7 @@ class DrowsinessAnalyzer:
         
         return drowsiness_score
 
+    #?Non bastano solo nuove?
     def _init_new_api(self):
         """Initializes with the new MediaPipe Tasks API (>= 0.10.0)"""
         from mediapipe.tasks import python as mp_python
