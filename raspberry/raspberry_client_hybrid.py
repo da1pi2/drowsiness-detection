@@ -229,7 +229,7 @@ class SmartRaspberryClient:
                         if cv2.waitKey(1) & 0xFF == ord('q'): break
 
                 # 3. STATUS PRINT
-                if self.frame_count % 15 == 0:
+                if self.frame_count % config.CAMERA_FPS == 0:
                     elapsed = time.time() - self.start_time
                     fps = self.frame_count / elapsed if elapsed > 0 else 0
                     sys_stats = self.get_system_stats()

@@ -172,16 +172,20 @@ def tcp_server_loop():
                 if not stats_data:
                     raise ConnectionError("Incomplete stats")
                 
-                try:
-                    rpi_stats = json.loads(stats_data.decode('utf-8'))
-                    state.update_rpi_stats(
-                        rpi_stats.get('cpu_temp', 0),
-                        rpi_stats.get('cpu_usage', 0),
-                        rpi_stats.get('ram_usage', 0),
-                        rpi_stats.get('fps', 0)
-                    )
-                except:
-                    pass
+                # Only update stats if JSON is not empty
+                if stats_size > 2:  # More than just '{}'
+                    try:
+                        rpi_stats = json.loads(stats_data.decode('utf-8'))
+                        # Update only if stats are present
+                        if rpi_stats:
+                            state.update_rpi_stats(
+                                rpi_stats.get('cpu_temp', state.rpi_cpu_temp),  # Keep old value if missing
+                                rpi_stats.get('cpu_usage', state.rpi_cpu_usage),
+                                rpi_stats.get('ram_usage', state.rpi_ram_usage),
+                                rpi_stats.get('fps', state.rpi_fps)
+                            )
+                    except:
+                        pass  # Keep old stats
                 
                 # 3. Read frame size
                 frame_size_data = _recv_exact(client_socket, 4)

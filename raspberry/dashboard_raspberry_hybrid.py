@@ -250,30 +250,32 @@ class HybridClient:
         ret, frame = self.camera.read()
         return frame if ret else None
 
-    def send_frame_with_stats(self, frame):
+    def send_frame_with_stats(self, frame, send_stats=False):
         """
         Send frame + system stats to server.
         Protocol: [4 bytes stats_size][JSON stats][4 bytes frame_size][JPEG frame]
+        Se send_stats=False, invia solo il frame (stats_size=0)
         """
         try:
-            # Get current system stats
-            elapsed = time.time() - self.start_time
-            fps = self.frame_count / elapsed if elapsed > 0 else 0
-            cpu_temp, cpu_usage, ram = self.get_system_stats()
-            
-            # Prepare stats JSON
-            stats = {
-                'cpu_temp': cpu_temp,
-                'cpu_usage': cpu_usage,
-                'ram_usage': ram,
-                'fps': fps
-            }
-            stats_json = json.dumps(stats).encode('utf-8')
-            
+            if send_stats:
+                # Get current system stats
+                elapsed = time.time() - self.start_time
+                fps = self.frame_count / elapsed if elapsed > 0 else 0
+                cpu_temp, cpu_usage, ram = self.get_system_stats()
+                # Prepare stats JSON
+                stats = {
+                    'cpu_temp': cpu_temp,
+                    'cpu_usage': cpu_usage,
+                    'ram_usage': ram,
+                    'fps': fps
+                }
+                stats_json = json.dumps(stats).encode('utf-8')
+            else:
+                # No stats - send empty JSON
+                stats_json = b'{}'
             # Encode frame
             _, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, config.JPEG_QUALITY])
             frame_data = encoded.tobytes()
-            
             # Send: stats_size + stats + frame_size + frame
             self.socket.sendall(struct.pack('>I', len(stats_json)))
             self.socket.sendall(stats_json)
@@ -386,7 +388,8 @@ class HybridClient:
                 # OPERATIONAL LOGIC
                 if self.connected:
                     # CLIENT MODE - Send frame + stats to PC server
-                    if not self.send_frame_with_stats(frame):
+                    send_stats = (self.frame_count % config.CAMERA_FPS == 0)
+                    if not self.send_frame_with_stats(frame, send_stats):
                         # Connection lost, will switch back to standalone
                         self.state.reset_for_standalone()
                         self.frame_count = 0
@@ -401,7 +404,7 @@ class HybridClient:
                     self.state.update(ear, mar, drowsy, yawn, face, preview)
 
                 # Update system stats periodically
-                if self.frame_count % 15 == 0:
+                if self.frame_count % config.CAMERA_FPS == 0:
                     elapsed = time.time() - self.start_time
                     fps = self.frame_count / elapsed if elapsed > 0 else 0
                     cpu_temp, cpu_usage, ram = self.get_system_stats()
@@ -460,7 +463,7 @@ while True:
     
     # UI refresh rate optimization
     if snap["connected_to_server"]:
-        ui_refresh_rate = 60.0  # Update UI every 60 seconds in client mode (minimal CPU)
+        ui_refresh_rate = 10.0  # Update UI every 10 seconds in client mode (minimal CPU)
     else:
         ui_refresh_rate = 0.05  # Update UI every 50ms in standalone
     
