@@ -69,8 +69,6 @@ class SharedState:
         self.calibrating = False
         self.calibration_done = False
         self.calibration_remaining = 0
-        self.calibration_ear_samples = 0
-        self.calibration_avg_ear = 0.0
         self.calibration_message = ""
 
     def update(self, ear, mar, is_drowsy, is_yawning, face_detected, frame_rgb):
@@ -100,13 +98,10 @@ class SharedState:
             self.ram_usage = ram_usage
             self.fps = fps
 
-    def update_calibration(self, remaining, ear_samples, avg_ear, message, face_detected, frame_rgb):
+    def update_calibration(self, remaining, message, frame_rgb):
         with self.lock:
             self.calibration_remaining = remaining
-            self.calibration_ear_samples = ear_samples
-            self.calibration_avg_ear = avg_ear
             self.calibration_message = message
-            self.face_detected = face_detected
             self.last_frame = frame_rgb
 
     def start_calibration(self):
@@ -157,8 +152,6 @@ class SharedState:
                 "calibrating": self.calibrating,
                 "calibration_done": self.calibration_done,
                 "calibration_remaining": self.calibration_remaining,
-                "calibration_ear_samples": self.calibration_ear_samples,
-                "calibration_avg_ear": self.calibration_avg_ear,
                 "calibration_message": self.calibration_message,
             }
 
@@ -189,8 +182,7 @@ class HybridClient:
         self.start_time = time.time()
         self.running = True
         
-        # Calibration
-        self.calibration_requested = False
+
 
     def get_system_stats(self):
         try:
@@ -291,8 +283,9 @@ class HybridClient:
             return False
 
     def run_calibration(self):
-        """10-second calibration to personalize EAR threshold"""
+        """Simple 10-second calibration to personalize EAR threshold"""
         self.state.start_calibration()
+        print("[CALIBRATION] Starting 10s calibration - keep eyes open naturally")
         
         ear_values = []
         start_time = time.time()
@@ -313,20 +306,12 @@ class HybridClient:
             
             remaining = calibration_duration - int(elapsed)
             
-            if face_detected:
-                if ear > 0.1:
-                    ear_values.append(ear)
-                avg_ear = sum(ear_values) / len(ear_values) if ear_values else 0.0
-                message = f"Keep eyes open naturally - {remaining}s remaining"
-                self.state.update_calibration(remaining, len(ear_values), avg_ear, message, True, preview)
-            else:
-                # Face lost - reset
-                if elapsed > 0.5:
-                    ear_values = []
-                    start_time = time.time()
-                    message = "⚠️ Face lost! Restarting calibration..."
-                    self.state.update_calibration(calibration_duration, 0, 0.0, message, False, preview)
-                    time.sleep(0.5)
+            # Collect EAR values when face is detected and eyes are open
+            if face_detected and ear > 0.1:
+                ear_values.append(ear)
+            
+            message = f"Calibrating... {remaining}s | Samples: {len(ear_values)}"
+            self.state.update_calibration(remaining, message, preview)
         
         # Calculate and save threshold
         if len(ear_values) > 0:
@@ -334,13 +319,10 @@ class HybridClient:
             new_threshold = avg_ear * 0.85
             self.analyzer.save_threshold(new_threshold)
             self.state.finish_calibration(new_threshold)
-            print(f"[CALIBRATION] Complete! Threshold: {new_threshold:.3f}")
+            print(f"[CALIBRATION] Complete! Avg EAR: {avg_ear:.3f} | Threshold: {new_threshold:.3f}")
         else:
             self.state.skip_calibration()
-            print("[CALIBRATION] Failed - using defaults")
-
-    def request_calibration(self):
-        self.calibration_requested = True
+            print("[CALIBRATION] Failed - no face detected, using defaults")
 
     def run(self):
         if not self.init_camera():
@@ -356,12 +338,14 @@ class HybridClient:
         if dummy_frame is not None:
             self.analyzer.detect(dummy_frame)
 
-        # Check for existing calibration or wait for user action
-        existing_threshold = self.analyzer.load_threshold()
+        # Check for existing calibration or run automatic calibration
         if os.path.exists(self.analyzer.config_path):
-            self.state.skip_calibration()  # Use existing
+            existing_threshold = self.analyzer.load_threshold()
+            self.state.skip_calibration()
             print(f"[CALIBRATION] Using saved threshold: {existing_threshold:.3f}")
-        # else: wait for user to click calibrate button
+        else:
+            # No saved config - run automatic calibration
+            self.run_calibration()
 
         # Start in standalone mode (will try to connect to server)
         self.state.set_mode(connected_to_server=False, standalone_active=True)
@@ -369,12 +353,6 @@ class HybridClient:
 
         try:
             while self.running:
-                # Check if calibration was requested
-                if self.calibration_requested:
-                    self.calibration_requested = False
-                    self.run_calibration()
-                    continue
-
                 frame = self.capture_frame()
                 if frame is None:
                     continue
@@ -435,10 +413,6 @@ if 'client_thread' not in st.session_state:
 st.title("🍓 Drowsiness Detection - Raspberry Pi")
 st.caption(f"📡 Auto-connect to PC server ({config.PC_SERVER_IP}:{config.PC_SERVER_PORT})")
 
-if st.button("🎯 Calibrate EAR"):
-    if 'client' in st.session_state:
-        st.session_state.client.request_calibration()
-
 frame_col, events_col = st.columns([2, 1])
 
 with frame_col:
@@ -481,13 +455,7 @@ while True:
     # Calibration UI
     with calibration_placeholder.container():
         if snap["calibrating"]:
-            st.info(f"📷 **{snap['calibration_message']}**")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Time Remaining", f"{snap['calibration_remaining']}s")
-            col2.metric("Samples", snap['calibration_ear_samples'])
-            col3.metric("Avg EAR", f"{snap['calibration_avg_ear']:.3f}")
-            if not snap["face_detected"]:
-                st.error("👤 Face not detected! Please look at the camera.")
+            st.warning(f"🎯 {snap['calibration_message']}")
     
     # Video Feed
     if snap["calibrating"] and snap["last_frame"] is not None:
