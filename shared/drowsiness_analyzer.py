@@ -81,7 +81,7 @@ class DrowsinessAnalyzer:
         """
         # 1. Score EAR (occhi chiusi)
         # Normalizza EAR rispetto alla soglia
-        ear_value_score = max(0, (config.EAR_THRESHOLD - ear) / self.ear_threshold) * 100
+        ear_value_score = max(0, (self.ear_threshold - ear) / self.ear_threshold) * 100
         ear_value_score = min(ear_value_score, 100)
         
         # 2. Score durata occhi chiusi

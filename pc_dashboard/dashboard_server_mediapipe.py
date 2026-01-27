@@ -149,8 +149,8 @@ def tcp_server_loop():
                 processed, ear, mar, is_drowsy, is_yawning, face_detected, _ = analyzer.detect(frame)
                 
                 # Prepare preview
-                preview = cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
-                preview = cv2.resize(preview, (640, 480))
+                #preview = cv2.cvtColor(processed, cv2.COLOR_RGB2BGR)
+                preview = cv2.resize(processed, (320, 240))
                 
                 state.update(ear, mar, is_drowsy, is_yawning, face_detected, preview)
                 
@@ -214,9 +214,9 @@ while True:
     
     # Video Feed
     if snap["last_frame"] is not None:
-        frame_placeholder.image(snap["last_frame"], channels="RGB", width='stretch')
+        frame_placeholder.image(snap["last_frame"], channels="RGB", width=320)
     else:
-        frame_placeholder.image("https://via.placeholder.com/640x480.png?text=Waiting+for+Video", width='content')
+        frame_placeholder.image("https://via.placeholder.com/300x300.png?text=Waiting+for+Video", width=320)
     
     # Alerts
     with alert_placeholder.container():
