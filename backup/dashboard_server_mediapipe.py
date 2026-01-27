@@ -253,7 +253,6 @@ with events_col:
 alert_placeholder = st.empty()
 info_placeholder = st.empty()
 metrics_placeholder = st.empty()
-rpi_stats_placeholder = st.empty()  # Fixed: use placeholder for RPi stats
 
 while True:
     snap = state.snapshot()
@@ -296,8 +295,8 @@ while True:
         c3.metric("MAR", f"{snap['mar']:.3f}")
         c4.metric("Events", f"🔴 {snap['drowsy_count']}  🥱 {snap['yawn_count']}")
     
-    # Raspberry Pi System Stats (FIXED: using placeholder to avoid duplication)
-    with rpi_stats_placeholder.container():
+    # Raspberry Pi System Stats
+    with st.container():
         if snap["connected"]:
             st.caption("🍓 Raspberry Pi Stats")
             r1, r2, r3, r4 = st.columns(4)

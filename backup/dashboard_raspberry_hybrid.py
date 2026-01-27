@@ -3,7 +3,7 @@ Streamlit Dashboard - Raspberry Pi Standalone Mode
 Runs locally on Raspberry when PC server is not available.
 Switches to CLIENT mode when server becomes available.
 
-Usage: streamlit run dashboard_raspberry_hybrid.py
+streamlit run dashboard_raspberry_hybrid.py --server.address 0.0.0.0 --server.port 8501
 """
 import os
 # Suppress MediaPipe/TF Lite logging (only show errors)
@@ -41,6 +41,18 @@ try:
 except ImportError:
     HAS_GPIOZERO = False
 
+def get_local_ip():
+    """Get the actual local IP address of the Raspberry Pi"""
+    try:
+        # Create a socket to determine the outgoing IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))  # Doesn't actually send data
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        return "127.0.0.1"
+
 st.set_page_config(page_title="Drowsiness - Raspberry Standalone", page_icon="🍓", layout="wide")
 
 class SharedState:
@@ -61,6 +73,7 @@ class SharedState:
         self.last_frame = None
         self._prev_drowsy = False
         self._prev_yawn = False
+        self._trigger_alert = False
         self.cpu_temp = 0.0
         self.cpu_usage = 0.0
         self.ram_usage = 0.0
@@ -86,6 +99,7 @@ class SharedState:
             if is_drowsy and not self._prev_drowsy:
                 self.drowsy_count += 1
                 self.events.appendleft(f"🔴 {datetime.now().strftime('%H:%M:%S')} - DROWSINESS (EAR: {ear:.3f})")
+                self._trigger_alert = True
             if is_yawning and not self._prev_yawn:
                 self.yawn_count += 1
                 self.events.appendleft(f"🥱 {datetime.now().strftime('%H:%M:%S')} - YAWN (MAR: {mar:.3f})")
@@ -162,6 +176,13 @@ class SharedState:
                 "calibration_message": self.calibration_message,
             }
 
+    def should_alert(self):
+        with self.lock:
+            if self._trigger_alert:
+                self._trigger_alert = False
+                return True
+            return False
+
     def reset_for_standalone(self):
         with self.lock:
             self.start_time = datetime.now()
@@ -196,7 +217,7 @@ class HybridClient:
         try:
             cpu_temp = CPUTemperature().temperature if HAS_GPIOZERO else 0.0
             cpu_usage = psutil.cpu_percent(percpu=True)
-            cpu_usage = sum(cpu_usage)  # Sum of all cores
+            cpu_usage = sum(cpu_usage)
             ram = psutil.virtual_memory().percent
             return cpu_temp, cpu_usage, ram
         except:
@@ -421,6 +442,34 @@ class HybridClient:
         elif self.camera:
             self.camera.release()
 
+def play_beep():
+    """Play alert sound (works on Linux/Raspberry Pi)"""
+    try:
+        import subprocess
+        # Try multiple methods for Linux audio alert
+        # 1. Try aplay with ALSA
+        result = subprocess.run(
+            ['aplay', '-q', '/usr/share/sounds/alsa/Front_Center.wav'],
+            capture_output=True, timeout=2
+        )
+        if result.returncode != 0:
+            # 2. Try speaker-test for a beep
+            subprocess.run(['speaker-test', '-t', 'sine', '-f', '800', '-l', '1'], 
+                          capture_output=True, timeout=1)
+    except:
+        try:
+            # 3. Fallback: system beep
+            os.system('echo -e "\\a"')
+        except:
+            pass
+
+# Get local IP for display
+LOCAL_IP = get_local_ip()
+print(f"\n{'='*60}")
+print(f"  🍓 RASPBERRY PI DASHBOARD")
+print(f"  Access from PC browser: http://{LOCAL_IP}:8501")
+print(f"{'='*60}\n")
+
 # Start client thread
 if 'client_thread' not in st.session_state:
     client = HybridClient(state)
@@ -428,13 +477,20 @@ if 'client_thread' not in st.session_state:
     st.session_state.client_thread = threading.Thread(target=client.run, daemon=True)
     st.session_state.client_thread.start()
 
+if 'muted' not in st.session_state:
+    st.session_state.muted = False
+
 # ===================== UI LAYOUT =====================
 st.title("🍓 Drowsiness Detection - Raspberry Pi")
-st.caption(f"📡 Auto-connect to PC server ({config.PC_SERVER_IP}:{config.PC_SERVER_PORT})")
+st.caption(f"📡 Dashboard accessible at: **http://{LOCAL_IP}:8501** | Auto-connect to PC server ({config.PC_SERVER_IP}:{config.PC_SERVER_PORT})")
 
-if st.button("🎯 Calibrate EAR"):
-    if 'client' in st.session_state:
-        st.session_state.client.request_calibration()
+ctrl_col, calib_col, mute_col = st.columns([6, 2, 1])
+with calib_col:
+    if st.button("🎯 Calibrate EAR"):
+        if 'client' in st.session_state:
+            st.session_state.client.request_calibration()
+with mute_col:
+    st.session_state.muted = st.checkbox("🔇 Mute", value=st.session_state.muted)
 
 frame_col, events_col = st.columns([2, 1])
 
@@ -452,22 +508,13 @@ calibration_placeholder = st.empty()
 metrics_placeholder = st.empty()
 system_placeholder = st.empty()
 
-# UI refresh rate: slower in client mode to reduce CPU
-ui_refresh_rate = 0.05
-
 while True:
     snap = state.snapshot()
-    
-    # UI refresh rate optimization
-    if snap["connected_to_server"]:
-        ui_refresh_rate = 60.0  # Update UI every 60 seconds in client mode (minimal CPU)
-    else:
-        ui_refresh_rate = 0.05  # Update UI every 50ms in standalone
     
     # Connection/Mode Status
     with info_placeholder.container():
         if snap["connected_to_server"]:
-            st.info("🟢 Connected to PC Server - Stats visible on PC dashboard")
+            st.info("🟢 Connected to PC Server - Processing on PC side")
         elif snap["calibrating"]:
             st.warning("🎯 Calibration in progress...")
         elif snap["standalone_active"]:
@@ -492,7 +539,7 @@ while True:
     elif snap["standalone_active"] and snap["last_frame"] is not None:
         frame_placeholder.image(snap["last_frame"], channels="RGB", width=320)
     elif snap["connected_to_server"]:
-        frame_placeholder.info("📡 Video streaming to PC Server\n\nView the dashboard on PC for live preview and stats.")
+        frame_placeholder.info("📡 Video streaming to PC Server\n\nView the dashboard on PC for live preview.")
     else:
         frame_placeholder.image("https://via.placeholder.com/320x240.png?text=Initializing...", width=320)
     
@@ -514,10 +561,21 @@ while True:
         else:
             st.markdown("---")
     
-    # Metrics (only in standalone mode)
+    # Audio Alert (only in standalone mode, not during calibration)
+    if snap["standalone_active"] and not snap["calibrating"] and state.should_alert() and not st.session_state.muted:
+        threading.Thread(target=play_beep, daemon=True).start()
+    
+    # Metrics (only meaningful in standalone mode)
     with metrics_placeholder.container():
-        if snap["calibrating"] or snap["connected_to_server"]:
-            pass  # Hide metrics during calibration or client mode
+        if snap["calibrating"]:
+            pass  # Hide normal metrics during calibration
+        elif snap["connected_to_server"]:
+            c1, c2, c3, c4 = st.columns(4)
+            status_text = "📡 PC-Side"
+            c1.metric("Status", status_text)
+            c2.metric("EAR", "PC-Side")
+            c3.metric("MAR", "PC-Side")
+            c4.metric("Events", f"🔴 {snap['drowsy_count']}  🥱 {snap['yawn_count']}")
         else:
             c1, c2, c3, c4 = st.columns(4)
             status_text = "⚠️ ALERT" if snap["is_drowsy"] else ("✅ OK" if snap["standalone_active"] else "⏳ Init")
@@ -526,17 +584,16 @@ while True:
             c3.metric("MAR", f"{snap['mar']:.3f}")
             c4.metric("Events", f"🔴 {snap['drowsy_count']}  🥱 {snap['yawn_count']}")
     
-    # System Stats (only in standalone mode)
+    # System Stats (Raspberry specific)
     with system_placeholder.container():
-        if snap["standalone_active"] and not snap["calibrating"]:
-            s1, s2, s3, s4 = st.columns(4)
-            s1.metric("FPS", f"{snap['fps']:.1f}")
-            s2.metric("CPU", f"{snap['cpu_usage']:.1f}%")
-            s3.metric("RAM", f"{snap['ram_usage']:.1f}%")
-            if HAS_GPIOZERO:
-                s4.metric("Temp", f"{snap['cpu_temp']:.1f}°C")
-            else:
-                s4.metric("Temp", "N/A")
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("FPS", f"{snap['fps']:.1f}")
+        s2.metric("CPU", f"{snap['cpu_usage']:.1f}%")
+        s3.metric("RAM", f"{snap['ram_usage']:.1f}%")
+        if HAS_GPIOZERO:
+            s4.metric("Temp", f"{snap['cpu_temp']:.1f}°C")
+        else:
+            s4.metric("Temp", "N/A")
     
     # Event Log
     with events_placeholder.container():
@@ -546,4 +603,4 @@ while True:
         else:
             st.caption("No events yet")
     
-    time.sleep(ui_refresh_rate)
+    time.sleep(0.05)
