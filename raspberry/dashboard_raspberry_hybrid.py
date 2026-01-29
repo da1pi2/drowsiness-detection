@@ -23,6 +23,7 @@ import threading
 from datetime import datetime
 from collections import deque
 import sys
+import pandas as pd
 
 # Add parent directory to path to import shared modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -45,6 +46,7 @@ st.set_page_config(page_title="Drowsiness - Raspberry Standalone", page_icon="�
 
 class SharedState:
     def __init__(self):
+        self.log_history = []
         self.lock = threading.Lock()
         self.ear = 0.0
         self.mar = 0.0
@@ -93,10 +95,29 @@ class SharedState:
 
     def update_system_stats(self, cpu_temp, cpu_usage, ram_usage, fps):
         with self.lock:
-            self.cpu_temp = cpu_temp
-            self.cpu_usage = cpu_usage
-            self.ram_usage = ram_usage
+            self.cpu_temp = round(cpu_temp, 1)
+            self.cpu_usage = round(cpu_usage, 1)
+            self.ram_usage = round(ram_usage, 1)
             self.fps = fps
+            
+            def to_comma_str(val):
+                return str(val).replace('.', ',')
+            
+            # Registra i dati per il CSV
+            status = "DROWSY" if self.is_drowsy else ("YAWNING" if self.is_yawning else "OK")
+            mode = "CLIENT" if self.connected_to_server else "STANDALONE"      
+
+
+            self.log_history.append({
+                "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "mode": mode,
+                "fps": round(fps, 2),
+                "ear": round(self.ear, 3),
+                "status": status,
+                "cpu_percent": to_comma_str(self.cpu_usage),
+                "ram_percent": to_comma_str(self.ram_usage),
+                "temp_c": to_comma_str(self.cpu_temp)
+            })
 
     def update_calibration(self, remaining, message, frame_rgb):
         with self.lock:
@@ -416,6 +437,32 @@ class HybridClient:
             self.camera.stop()
         elif self.camera:
             self.camera.release()
+    
+def save_logs_on_exit():
+        """Funzione per salvare i dati accumulati in un file CSV"""
+        history = state.log_history
+    
+        if history:
+            df = pd.DataFrame(history)
+            
+            # Definiamo il percorso sulla chiavetta
+            usb_path = "/mnt/usb_logs"
+            
+            # Verifichiamo se la chiavetta è effettivamente montata
+            if os.path.ismount(usb_path):
+                filename = f"{usb_path}/drowsiness_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                try:
+                    df.to_csv(filename, index=False)
+                    print(f"\n[SYSTEM] Log salvato su USB: {filename}")
+                except Exception as e:
+                    print(f"\n[ERROR] Errore durante il salvataggio su USB: {e}")
+            else:
+                # Fallback sulla cartella locale se la USB non è inserita
+                filename = f"drowsiness_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                df.to_csv(filename, index=False)
+                print(f"\n[WARNING] USB non trovata. Log salvato localmente: {filename}")
+        else:
+            print("\n[SYSTEM] Nessun dato da salvare.")
 
 # Start client thread
 if 'client_thread' not in st.session_state:
@@ -447,90 +494,96 @@ system_placeholder = st.empty()
 # UI refresh rate: slower in client mode to reduce CPU
 ui_refresh_rate = 0.05
 
-while True:
-    snap = state.snapshot()
-    
-    # UI refresh rate optimization
-    if snap["connected_to_server"]:
-        ui_refresh_rate = 10.0  # Update UI every 10 seconds in client mode (minimal CPU)
-    else:
-        ui_refresh_rate = 0.05  # Update UI every 50ms in standalone
-    
-    # Connection/Mode Status
-    with info_placeholder.container():
+try:
+    while True:
+        snap = state.snapshot()
+        
+        # UI refresh rate optimization
         if snap["connected_to_server"]:
-            st.info("🟢 Connected to PC Server - Stats visible on PC dashboard")
-        elif snap["calibrating"]:
-            st.warning("🎯 Calibration in progress...")
-        elif snap["standalone_active"]:
-            st.success(f"🍓 Standalone Mode - Local Processing | Frames: {snap['frames_processed']}")
+            ui_refresh_rate = 10.0  # Update UI every 10 seconds in client mode (minimal CPU)
         else:
-            st.warning("🟡 Initializing...")
-    
-    # Calibration UI - only show when calibrating, clear when done
-    if snap["calibrating"]:
-        calibration_placeholder.warning(f"🎯 {snap['calibration_message']}")
-    else:
-        calibration_placeholder.empty()
-    
-    # Video Feed
-    if snap["calibrating"] and snap["last_frame"] is not None:
-        frame_placeholder.image(snap["last_frame"], channels="RGB", width=320)
-    elif snap["standalone_active"] and snap["last_frame"] is not None:
-        frame_placeholder.image(snap["last_frame"], channels="RGB", width=320)
-    elif snap["connected_to_server"]:
-        frame_placeholder.info("📡 Video streaming to PC Server\n\nView the dashboard on PC for live preview and stats.")
-    else:
-        frame_placeholder.image("https://via.placeholder.com/320x240.png?text=Initializing...", width=320)
-    
-    # Alerts (only in standalone mode, not during calibration)
-    with alert_placeholder.container():
+            ui_refresh_rate = 0.05  # Update UI every 50ms in standalone
+        
+        # Connection/Mode Status
+        with info_placeholder.container():
+            if snap["connected_to_server"]:
+                st.info("🟢 Connected to PC Server - Stats visible on PC dashboard")
+            elif snap["calibrating"]:
+                st.warning("🎯 Calibration in progress...")
+            elif snap["standalone_active"]:
+                st.success(f"🍓 Standalone Mode - Local Processing | Frames: {snap['frames_processed']}")
+            else:
+                st.warning("🟡 Initializing...")
+        
+        # Calibration UI - only show when calibrating, clear when done
         if snap["calibrating"]:
-            st.markdown("---")
-        elif snap["standalone_active"]:
-            if not snap.get("face_detected", True):
-                st.error("🚨 FACE NOT DETECTED - PLEASE ADJUST CAMERA", icon="👤")
-            elif snap["is_drowsy"]:
-                st.error("⚠️ DROWSINESS DETECTED!", icon="🚨")
-            elif snap["is_yawning"]:
-                st.warning("🥱 Yawn Detected", icon="😴")
+            calibration_placeholder.warning(f"🎯 {snap['calibration_message']}")
+        else:
+            calibration_placeholder.empty()
+        
+        # Video Feed
+        if snap["calibrating"] and snap["last_frame"] is not None:
+            frame_placeholder.image(snap["last_frame"], channels="RGB", width=320)
+        elif snap["standalone_active"] and snap["last_frame"] is not None:
+            frame_placeholder.image(snap["last_frame"], channels="RGB", width=320)
+        elif snap["connected_to_server"]:
+            frame_placeholder.info("📡 Video streaming to PC Server\n\nView the dashboard on PC for live preview and stats.")
+        else:
+            frame_placeholder.image("https://via.placeholder.com/320x240.png?text=Initializing...", width=320)
+        
+        # Alerts (only in standalone mode, not during calibration)
+        with alert_placeholder.container():
+            if snap["calibrating"]:
+                st.markdown("---")
+            elif snap["standalone_active"]:
+                if not snap.get("face_detected", True):
+                    st.error("🚨 FACE NOT DETECTED - PLEASE ADJUST CAMERA", icon="👤")
+                elif snap["is_drowsy"]:
+                    st.error("⚠️ DROWSINESS DETECTED!", icon="🚨")
+                elif snap["is_yawning"]:
+                    st.warning("🥱 Yawn Detected", icon="😴")
+                else:
+                    st.markdown("---")
+            elif snap["connected_to_server"]:
+                st.info("Alerts managed by PC Server")
             else:
                 st.markdown("---")
-        elif snap["connected_to_server"]:
-            st.info("Alerts managed by PC Server")
-        else:
-            st.markdown("---")
-    
-    # Metrics (only in standalone mode)
-    with metrics_placeholder.container():
-        if snap["calibrating"] or snap["connected_to_server"]:
-            pass  # Hide metrics during calibration or client mode
-        else:
-            c1, c2, c3, c4 = st.columns(4)
-            status_text = "⚠️ ALERT" if snap["is_drowsy"] else ("✅ OK" if snap["standalone_active"] else "⏳ Init")
-            c1.metric("Status", status_text)
-            c2.metric("EAR", f"{snap['ear']:.3f}")
-            c3.metric("MAR", f"{snap['mar']:.3f}")
-            c4.metric("Events", f"🔴 {snap['drowsy_count']}  🥱 {snap['yawn_count']}")
-    
-    # System Stats (only in standalone mode)
-    with system_placeholder.container():
-        if snap["standalone_active"] and not snap["calibrating"]:
-            s1, s2, s3, s4 = st.columns(4)
-            s1.metric("FPS", f"{snap['fps']:.1f}")
-            s2.metric("CPU", f"{snap['cpu_usage']:.1f}%")
-            s3.metric("RAM", f"{snap['ram_usage']:.1f}%")
-            if HAS_GPIOZERO:
-                s4.metric("Temp", f"{snap['cpu_temp']:.1f}°C")
+        
+        # Metrics (only in standalone mode)
+        with metrics_placeholder.container():
+            if snap["calibrating"] or snap["connected_to_server"]:
+                pass  # Hide metrics during calibration or client mode
             else:
-                s4.metric("Temp", "N/A")
-    
-    # Event Log
-    with events_placeholder.container():
-        if snap["events"]:
-            for event in snap["events"][:8]:
-                st.text(event)
-        else:
-            st.caption("No events yet")
-    
-    time.sleep(ui_refresh_rate)
+                c1, c2, c3, c4 = st.columns(4)
+                status_text = "⚠️ ALERT" if snap["is_drowsy"] else ("✅ OK" if snap["standalone_active"] else "⏳ Init")
+                c1.metric("Status", status_text)
+                c2.metric("EAR", f"{snap['ear']:.3f}")
+                c3.metric("MAR", f"{snap['mar']:.3f}")
+                c4.metric("Events", f"🔴 {snap['drowsy_count']}  🥱 {snap['yawn_count']}")
+        
+        # System Stats (only in standalone mode)
+        with system_placeholder.container():
+            if snap["standalone_active"] and not snap["calibrating"]:
+                s1, s2, s3, s4 = st.columns(4)
+                s1.metric("FPS", f"{snap['fps']:.1f}")
+                s2.metric("CPU", f"{snap['cpu_usage']:.1f}%")
+                s3.metric("RAM", f"{snap['ram_usage']:.1f}%")
+                if HAS_GPIOZERO:
+                    s4.metric("Temp", f"{snap['cpu_temp']:.1f}°C")
+                else:
+                    s4.metric("Temp", "N/A")
+        
+        # Event Log
+        with events_placeholder.container():
+            if snap["events"]:
+                for event in snap["events"][:8]:
+                    st.text(event)
+            else:
+                st.caption("No events yet")
+        
+        time.sleep(ui_refresh_rate)
+except KeyboardInterrupt:
+    save_logs_on_exit()
+    st.stop()
+finally:
+    save_logs_on_exit()

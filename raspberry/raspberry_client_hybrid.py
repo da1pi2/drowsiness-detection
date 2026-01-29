@@ -12,6 +12,7 @@ import json
 from gpiozero import CPUTemperature
 from datetime import datetime
 import sys
+import pandas as pd
 
 # Suppress MediaPipe/TF Lite logging (0=all, 1=info, 2=warnings, 3=errors)
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = '3'
@@ -29,6 +30,7 @@ except ImportError:
 
 class SmartRaspberryClient:
     def __init__(self, server_ip, server_port):
+        self.log_history = []
         self.server_ip = server_ip
         self.server_port = server_port
         self.socket = None
@@ -201,6 +203,32 @@ class SmartRaspberryClient:
                 self.socket.close()
             return False
 
+    def save_logs_on_exit(self):
+                """Salva i log sulla chiavetta USB montata"""
+                history = self.log_history
+                
+                if history:
+                    df = pd.DataFrame(history)
+                    
+                    # Definiamo il percorso sulla chiavetta
+                    usb_path = "/mnt/usb_logs"
+                    
+                    # Verifichiamo se la chiavetta è effettivamente montata
+                    if os.path.ismount(usb_path):
+                        filename = f"{usb_path}/drowsiness_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                        try:
+                            df.to_csv(filename, index=False)
+                            print(f"\n[SYSTEM] Log salvato su USB: {filename}")
+                        except Exception as e:
+                            print(f"\n[ERROR] Errore durante il salvataggio su USB: {e}")
+                    else:
+                        # Fallback sulla cartella locale se la USB non è inserita
+                        filename = f"drowsiness_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                        df.to_csv(filename, index=False)
+                        print(f"\n[WARNING] USB non trovata. Log salvato localmente: {filename}")
+                else:
+                    print("\n[SYSTEM] Nessun dato da salvare.")
+
     def run(self):
         if not self.init_camera(): return
         
@@ -264,6 +292,21 @@ class SmartRaspberryClient:
                     elapsed = time.time() - self.start_time
                     fps = self.frame_count / elapsed if elapsed > 0 else 0
                     cpu_temp, cpu_usage, ram = self.get_system_stats()
+
+                    def to_comma_str(val):
+                        return str(val).replace('.', ',')
+                    # Registra i dati per il CSV
+                    self.log_history.append({
+                        "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        "mode": mode_label,
+                        "fps": to_comma_str(round(fps, 1)),
+                        "ear": to_comma_str(round(current_ear, 3)) if not self.connected else "N/A",
+                        "status": status_label,
+                        "cpu_percent": to_comma_str(round(cpu_usage, 1)),
+                        "ram_percent": to_comma_str(round(ram, 1)),
+                        "temp_c": to_comma_str(round(cpu_temp, 1))
+                    })
+
                     sys_stats = f"CPU: {cpu_usage:.1f}% | RAM: {ram:.1f}% | Temp: {cpu_temp:.1f}C"
 
                     # EAR is shown only in Standalone (in Client the PC computes it)
@@ -274,8 +317,10 @@ class SmartRaspberryClient:
                           f"MODE: {mode_label} | {score_str} | FPS: {fps:.1f} | {ear_str} | {status_label} || {sys_stats}")
 
         except KeyboardInterrupt:
+            self.save_logs_on_exit()
             print("\n[STOP] User interrupted")
         finally:
+            self.save_logs_on_exit()
             if self.socket: self.socket.close()
             if self.use_picamera2: self.camera.stop()
             else: self.camera.release()
