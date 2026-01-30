@@ -11,11 +11,6 @@ scipy>=1.7.0
 # Web Dashboard
 streamlit
 
-# ===================== DLIB VERSION =====================
-# dlib is compiled more easily on PC with more RAM
-# Requires CMake and VS Build Tools on Windows
-dlib>=19.24.0
-
 # ===================== MEDIAPIPE VERSION =====================
 # MediaPipe is easier to install (no compilation needed)
 # Used in: pc_server_mediapipe.py, streamlit_dashboard_mediapipe.py
